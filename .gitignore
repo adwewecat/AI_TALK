@@ -1,0 +1,38 @@
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*credentials*.json
+*secret*.json
+
+# Build & Dependencies
+node_modules/
+dist/
+build/
+out/
+.next/
+.nuxt/
+target/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Logs & Temp
+*.log
+logs/
+tmp/
+.scratch/
+.private-journal/
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*.log
+
