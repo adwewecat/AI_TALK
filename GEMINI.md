@@ -4,25 +4,38 @@
 
 ## Core Architecture
 
-- **Overview:** `AI_TALK` ("Na Na") — planned cross-platform (Android & iOS) AI voice assistant & companion app with wake-word activation ("Na Na"), device/app voice control, multi-LLM support (Gemini / ChatGPT / Claude), cute female companion persona, Google Sign-In, and Wi-Fi-only Google Drive conversation history & memory sync.
-- **Current Repository State:** Greenfield repository connected to `https://github.com/adwewecat/AI_TALK.git` (`LICENSE`, `README.md`) with `Skill_Workflow_A.I` integrated in `.agents/skills/`. Application source code and manifests are pending design approval (`brainstorming` -> `writing-plans`).
+- **Overview:** `AI_TALK` (**Na Na**, `com.adwewecat.nana`) — native Android voice assistant & AI companion optimized for **iQOO Z10 Turbo Pro (OriginOS 6 / Android 16)**:
+  - Offline `"Na Na"` wake-word Foreground Service (`TYPE_BUILTIN_MIC` to protect Bluetooth A2DP stereo music) + continuous two-way Vietnamese voice sessions + Quick Settings Tile & optional `VoiceInteractionService`.
+  - Multi-key & multi-provider AI failover (`Gemini Pro #1` -> `Gemini Pro #2` -> optional `Claude` / `ChatGPT` -> Free tier **"Em gái"**) with auto-routing for Vertex AI Express (`AQ.` -> `aiplatform.googleapis.com`) and AI Studio (`AIza` -> `generativelanguage.googleapis.com`), exact Vietnamese `"Na Na → Em gái"` handoff (`"Em vẫn đang mệt, anh có muốn tâm sự với em gái em không?"` -> `"ok"`), and decoupled Chat vs TTS health.
+  - Hands-free Android 16 device control: YouTube voice search + Accessibility auto-play, 3-tier SIM + Zalo/Messenger/Telegram call answer/decline (preserving Vivo/iQOO stock dialer — never declares `InCallService` or `ROLE_DIALER`), and OriginOS `Record/Call` call-recording SAF watcher + in-app fallback.
+  - Offline-first Room SQLite storage, Keystore-encrypted API key vault (`EncryptedSharedPreferences`), AppAuth PKCE Google Drive OAuth (`drive.file`), long-term companion memory extraction, and strict **Wi-Fi-only** (`NetworkType.UNMETERED` + `TRANSPORT_WIFI`/`INTERNET`/`NOT_METERED` + live `NetworkCallback` cancel) resumable Drive sync & reinstall restore.
 - **Key Directories:**
-  - `.agents/skills/` — Installed workflow skills (`obra/superpowers` + `mattpocock/skills`, 42 skills).
-  - App source/test directories will be recorded here once the tech stack and design spec are approved.
+  - `core/src/main/kotlin/com/adwewecat/nana/core/` — Pure JVM library (`model/`, `quota/`, `ai/`, `voice/`, `sync/`).
+  - `core/src/test/kotlin/com/adwewecat/nana/core/` — Pure JVM & `MockWebServer` unit tests (43 tests).
+  - `app/src/main/kotlin/com/adwewecat/nana/` — Android app (`data/`, `voice/`, `actions/`, `di/`, `ui/`, `NaNaApplication.kt`, `MainActivity.kt`).
+  - `app/src/test/kotlin/com/adwewecat/nana/` — Robolectric Android unit tests (27 tests).
+  - `.github/workflows/android-build.yml` — CI test & debug APK build workflow.
+  - `docs/superpowers/` — Approved design spec & 10-task TDD plan; `SETUP_ANDROID.md` — iQOO setup guide.
+  - `.agents/skills/` — Installed `Skill_Workflow_A.I` suite (42 skills).
 
 ## Tech Stack
 
-- **Language / Runtime:** TBD (pending architecture selection during brainstorming; local machine has Node.js `v24.22.1`, Python `3.12.10`, OpenJDK `17.0.21`; Flutter and Android SDK are not currently installed).
-- **Frameworks / Libraries:** TBD (Android & iOS mobile framework, wake-word engine, AI/Voice SDKs, Google Drive API).
-- **Database / Infra:** Local offline-first storage + Google Sign-In & Google Drive API (Wi-Fi-only sync).
+- **Language / Runtime:** Kotlin `2.1.0`, OpenJDK `17`, Gradle `8.9`, AGP `8.7.3` (`minSdk = 26`, `compileSdk = 35`, `targetSdk = 35`).
+- **Frameworks / Libraries:** Jetpack Compose BOM `2024.12.01` (Material 3 dark-first), Room `2.7.1` (KSP `2.1.0-1.0.29`), WorkManager `2.10.0`, OkHttp `4.12.0`, Kotlinx Serialization `1.7.3`, Coroutines `1.9.0`, AppAuth `0.11.1`, Security Crypto `1.1.0-alpha06`, Vosk Android `0.3.75`.
+- **Testing:** JUnit 4, MockWebServer `4.12.0`, Robolectric `4.14.1`, Coroutines Test `1.9.0`, WorkManager Testing.
+- **Database / Infra:** Local Room SQLite (`nana.db`) + Android Keystore vault + Google Drive API v3 (`AI_TALK_NaNa/`, strictly Wi-Fi-only).
 
 ## Build, Test & Lint Commands
 
 ```bash
-# Pending app scaffold after design approval (brainstorming -> writing-plans)
-# Build:   TBD
-# Test:    TBD
-# Lint:    TBD
+# Run pure-JVM core tests (fast, < 5s)
+.\gradlew.bat :core:test --no-daemon
+
+# Run full unit test suite (:core + :app Robolectric, 70 tests)
+.\gradlew.bat :core:test :app:testDebugUnitTest --no-daemon
+
+# Build debug APK (outputs app/build/outputs/apk/debug/app-debug.apk)
+.\gradlew.bat :app:assembleDebug --no-daemon
 ```
 
 <!-- skill-workflow-ai:start -->
