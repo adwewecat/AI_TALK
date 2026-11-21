@@ -41,6 +41,8 @@ class AiChatRouter(
         memories: List<MemoryFact>,
         userText: String?,
         userAudio: AudioAttachment? = null,
+        enableTools: Boolean = true,
+        transitionOnExhausted: Boolean = true,
     ): RoutedChatReply {
         val isLittleSister = stateMachine.state == QuotaState.ACTIVE_LITTLE_SISTER
         val persona = if (isLittleSister) PersonaMode.LITTLE_SISTER else PersonaMode.NANA
@@ -61,6 +63,7 @@ class AiChatRouter(
                 history = history,
                 userText = userText,
                 userAudio = userAudio,
+                enableTools = enableTools,
                 resolveTranscript = {
                     if (!transcriptAttempted && userAudio != null) {
                         transcriptAttempted = true
@@ -68,7 +71,7 @@ class AiChatRouter(
                     }
                     cachedTranscript
                 },
-            )
+            ) ?: continue
 
             when (val result = dispatchGenerate(key, request)) {
                 is LlmResult.Success -> {
@@ -93,6 +96,16 @@ class AiChatRouter(
                 persona = PersonaMode.LITTLE_SISTER,
                 toolCalls = emptyList(),
                 quotaExhaustedNotice = false,
+                usedKeyId = null,
+            )
+        }
+
+        if (!transitionOnExhausted) {
+            return RoutedChatReply(
+                replyText = "",
+                persona = PersonaMode.NANA,
+                toolCalls = emptyList(),
+                quotaExhaustedNotice = true,
                 usedKeyId = null,
             )
         }
@@ -128,22 +141,27 @@ class AiChatRouter(
         history: List<ChatMessage>,
         userText: String?,
         userAudio: AudioAttachment?,
+        enableTools: Boolean,
         resolveTranscript: () -> String?,
-    ): LlmRequest {
-        val supportsInlineAudio = key.provider in GEMINI_PROVIDERS
-        if (supportsInlineAudio || userAudio == null) {
+    ): LlmRequest? {
+        if (key.provider in GEMINI_PROVIDERS) {
             return LlmRequest(
                 systemPrompt = systemPrompt,
                 history = history,
                 userText = userText,
                 userAudio = userAudio,
+                enableTools = enableTools,
             )
         }
 
-        val effectiveText = if (!userText.isNullOrBlank()) {
-            userText
-        } else {
-            resolveTranscript()
+        val effectiveText = when {
+            !userText.isNullOrBlank() -> userText
+            userAudio != null -> resolveTranscript()
+            else -> null
+        }
+        // Skip non-Gemini providers when an audio-only turn has no usable transcript so Gemini can still try.
+        if (effectiveText.isNullOrBlank()) {
+            return null
         }
 
         return LlmRequest(
@@ -151,6 +169,7 @@ class AiChatRouter(
             history = history,
             userText = effectiveText,
             userAudio = null,
+            enableTools = enableTools,
         )
     }
 

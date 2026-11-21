@@ -12,14 +12,23 @@ import com.adwewecat.nana.core.model.ActionExecutionResult
 import com.adwewecat.nana.core.model.ApiKeyEntry
 import com.adwewecat.nana.core.model.DeviceActionExecutor
 import com.adwewecat.nana.core.model.DeviceCommand
+import com.adwewecat.nana.core.model.MemoryCategory
+import com.adwewecat.nana.core.model.MemoryFact
 import com.adwewecat.nana.core.model.PersonaMode
 import com.adwewecat.nana.core.model.ProviderType
 import com.adwewecat.nana.core.model.QuotaState
 import com.adwewecat.nana.core.quota.KeyPoolManager
 import com.adwewecat.nana.core.quota.NaNaQuotaStateMachine
 import com.adwewecat.nana.data.local.NaNaDatabase
+import com.adwewecat.nana.data.local.toEntity
 import java.io.File
 import java.util.Base64
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
@@ -300,7 +309,162 @@ class NaNaVoiceOrchestratorTest {
         val modelDir = File(context.filesDir, "vosk-model-vn").apply { mkdirs() }
         File(modelDir, "README").writeText("placeholder")
         assertTrue(wakeEngine.isModelAvailable())
+        assertEquals(null, VoskWakeWordEngine.recognizeLocalCommandFromPcm(context, byteArrayOf(1, 2, 3, 4)))
     }
+
+    @Test(timeout = 15_000)
+    fun extractMemoriesDeduplicatesFactsByCategoryAndNormalizedKeyAcrossSessions() = runTest {
+        db.memoryFactDao().upsert(
+            MemoryFact(
+                id = "mem_existing_1",
+                category = MemoryCategory.PREFERENCE,
+                key = "morning_drink",
+                value = "Trà đá",
+                confidence = 0.8f,
+                updatedAtMs = 100_000L,
+                synced = true,
+            ).toEntity(),
+        )
+        db.messageDao().upsert(
+            com.adwewecat.nana.core.model.ChatMessage(
+                id = "msg-1",
+                sessionId = "s-1",
+                role = "user",
+                persona = PersonaMode.NANA,
+                content = "Dạo này sáng anh đổi sang uống cà phê sữa đá và ngủ lúc 11 giờ đêm nha.",
+                createdAtMs = 200_000L,
+            ).toEntity(),
+        )
+
+        val extractedJson = """
+            [
+              {"category":"PREFERENCE","key":"Morning_Drink","value":"Cà phê sữa đá","confidence":0.95},
+              {"category":"HABIT","key":"sleep_time","value":"11 giờ đêm","confidence":0.9}
+            ]
+        """.trimIndent().replace("\"", "\\\"")
+
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody(
+                    """
+                    {
+                      "candidates": [
+                        {
+                          "content": {
+                            "parts": [
+                              { "text": "$extractedJson" }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                    """.trimIndent(),
+                ),
+        )
+
+        val keyPool = KeyPoolManager(initialKeys = listOf(paidGeminiKey("paid-1")), clockMs = { 10_000L })
+        val orchestrator = createOrchestrator(
+            keyPool = keyPool,
+            stateMachine = NaNaQuotaStateMachine(keyPool),
+            audioPlayer = FakeAudioPlaybackEngine(),
+            localTts = FakeLocalFallbackTts(),
+            actionExecutor = FakeDeviceActionExecutor(),
+            syncTrigger = FakeSyncTrigger(),
+        )
+
+        orchestrator.extractMemoriesFromRecentSession()
+
+        val allFacts = db.memoryFactDao().getAll()
+        assertEquals(2, allFacts.size)
+        val drinkFact = allFacts.first { it.id == "mem_existing_1" }
+        assertEquals("Cà phê sữa đá", drinkFact.value)
+        assertFalse(drinkFact.synced)
+        assertTrue(allFacts.any { it.key == "sleep_time" && it.value == "11 giờ đêm" })
+    }
+
+    @Test(timeout = 15_000)
+    fun sessionStopTriggersBackgroundExtractionAndPreCachesTiredPromptOnce() = runBlocking {
+        val primaryPcm1 = Base64.getEncoder().encodeToString(byteArrayOf(0x01, 0x02))
+        val precachePcm = byteArrayOf(0x09, 0x08, 0x07, 0x06)
+        val precachePcmB64 = Base64.getEncoder().encodeToString(precachePcm)
+        val primaryPcm2 = Base64.getEncoder().encodeToString(byteArrayOf(0x04, 0x05))
+        val extractedJson = """[{"category":"PREFERENCE","key":"favorite_tea","value":"Trà đào","confidence":0.9}]"""
+            .replace("\"", "\\\"")
+
+        // 1: Turn 1 chat, 2: Turn 1 TTS, 3: One-shot TIRED_CONSENT_PROMPT pre-cache
+        server.enqueue(geminiTextResponse("Dạ em chào anh!"))
+        server.enqueue(geminiAudioResponse(primaryPcm1))
+        server.enqueue(geminiAudioResponse(precachePcmB64))
+        // 4: Turn 2 chat, 5: Turn 2 TTS (must NOT re-trigger pre-cache)
+        server.enqueue(geminiTextResponse("Dạ em nhớ anh thích trà đào nha!"))
+        server.enqueue(geminiAudioResponse(primaryPcm2))
+        // 6: Automatic MemoryExtractor on stopSession()
+        server.enqueue(geminiTextResponse(extractedJson))
+        // 7: Simulated error on later direct extraction must NOT flip NANA_TIRED
+        server.enqueue(MockResponse().setResponseCode(500).setBody("server error"))
+
+        val bgScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val keyPool = KeyPoolManager(initialKeys = listOf(paidGeminiKey("paid-1")), clockMs = { 10_000L })
+            val stateMachine = NaNaQuotaStateMachine(keyPool)
+            val fakeAudioPlayer = FakeAudioPlaybackEngine()
+            val orchestrator = createOrchestrator(
+                keyPool = keyPool,
+                stateMachine = stateMachine,
+                audioPlayer = fakeAudioPlayer,
+                localTts = FakeLocalFallbackTts(),
+                actionExecutor = FakeDeviceActionExecutor(),
+                syncTrigger = FakeSyncTrigger(),
+                backgroundScope = bgScope,
+            )
+
+            orchestrator.onWakeWordDetected()
+            orchestrator.onUserUtterance(transcript = "Chào Na Na", wavBytes = null)
+
+            var waitMs = 0
+            while (fakeAudioPlayer.getCachedTiredPrompt() == null && waitMs < 3_000) {
+                delay(20)
+                waitMs += 20
+            }
+            assertArrayEquals(precachePcm, fakeAudioPlayer.getCachedTiredPrompt())
+            assertEquals(3, server.requestCount)
+
+            // Even if cache is cleared externally, AtomicBoolean ensures pre-cache only runs once.
+            fakeAudioPlayer.clearCachedTiredPrompt()
+            orchestrator.onUserUtterance(transcript = "Anh thích uống trà đào", wavBytes = null)
+            delay(100)
+            assertEquals(null, fakeAudioPlayer.getCachedTiredPrompt())
+            assertEquals(5, server.requestCount)
+
+            orchestrator.stopSession()
+            waitMs = 0
+            while (db.memoryFactDao().getAll().isEmpty() && waitMs < 3_000) {
+                delay(20)
+                waitMs += 20
+            }
+            val facts = db.memoryFactDao().getAll()
+            assertEquals(1, facts.size)
+            assertEquals("Trà đào", facts.single().value)
+            assertEquals(QuotaState.ACTIVE_NANA, stateMachine.state)
+
+            // Failed background extraction must leave ACTIVE_NANA untouched.
+            orchestrator.extractMemoriesFromRecentSession()
+            assertEquals(QuotaState.ACTIVE_NANA, stateMachine.state)
+        } finally {
+            bgScope.cancel()
+        }
+    }
+
+    private fun geminiTextResponse(text: String) = MockResponse()
+        .setResponseCode(200)
+        .setBody("""{"candidates":[{"content":{"parts":[{"text":"$text"}]}}]}""")
+
+    private fun geminiAudioResponse(base64Pcm: String) = MockResponse()
+        .setResponseCode(200)
+        .setBody(
+            """{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"audio/L16;codec=pcm;rate=24000","data":"$base64Pcm"}}]}}]}""",
+        )
 
     private fun createOrchestrator(
         keyPool: KeyPoolManager,
@@ -309,6 +473,7 @@ class NaNaVoiceOrchestratorTest {
         localTts: LocalFallbackTts,
         actionExecutor: DeviceActionExecutor,
         syncTrigger: SyncTrigger,
+        backgroundScope: CoroutineScope? = null,
     ): NaNaVoiceOrchestrator {
         val baseUrl = server.url("/").toString().trimEnd('/')
         val httpClient = OkHttpClient()
@@ -327,6 +492,7 @@ class NaNaVoiceOrchestratorTest {
             memoryFactDao = db.memoryFactDao(),
             syncTrigger = syncTrigger,
             clockMs = { 1_793_500_000_000L },
+            backgroundScope = backgroundScope,
         )
     }
 
@@ -362,6 +528,10 @@ class NaNaVoiceOrchestratorTest {
 
         override fun cacheTiredPrompt(pcmBytes: ByteArray) {
             cachedTiredPrompt = pcmBytes
+        }
+
+        fun clearCachedTiredPrompt() {
+            cachedTiredPrompt = null
         }
     }
 

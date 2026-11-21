@@ -40,6 +40,30 @@ class TtsRouter(
     ): SpokenOutput {
         if (text.isBlank()) return SpokenOutput.Failed
 
+        val cloudAudio = synthesizeCloudOnly(
+            text = text,
+            persona = persona,
+            preferredGeminiVoice = preferredGeminiVoice,
+        )
+        if (cloudAudio != null) {
+            return SpokenOutput.CloudPcm(cloudAudio)
+        }
+
+        return if (localFallback.speak(text, persona)) {
+            SpokenOutput.SpokenByLocalFallback
+        } else {
+            SpokenOutput.Failed
+        }
+    }
+
+    /** Synthesizes [text] via cloud neural TTS only without triggering [localFallback]. */
+    suspend fun synthesizeCloudOnly(
+        text: String,
+        persona: PersonaMode,
+        preferredGeminiVoice: String = "Aoede",
+    ): TtsAudio? {
+        if (text.isBlank()) return null
+
         val styleInstruction = PersonaPromptBuilder.buildTtsStyleInstruction(persona)
         val candidateKeys = keyPool.nextHealthyTtsKeys().filter { key ->
             key.provider != ProviderType.CLAUDE &&
@@ -69,7 +93,7 @@ class TtsRouter(
             }
 
             when (result) {
-                is TtsResult.Success -> return SpokenOutput.CloudPcm(result.audio)
+                is TtsResult.Success -> return result.audio
                 // Decoupled health: only disable TTS capability on this key; never alter chat quota/status.
                 is TtsResult.Unsupported -> keyPool.markTtsUnsupported(key.id)
                 is TtsResult.QuotaExceeded,
@@ -77,11 +101,6 @@ class TtsRouter(
                 -> Unit
             }
         }
-
-        return if (localFallback.speak(text, persona)) {
-            SpokenOutput.SpokenByLocalFallback
-        } else {
-            SpokenOutput.Failed
-        }
+        return null
     }
 }

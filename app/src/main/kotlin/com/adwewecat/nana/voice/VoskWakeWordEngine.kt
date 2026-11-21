@@ -172,6 +172,8 @@ class VoskWakeWordEngine(
         private const val WAKE_GRAMMAR_JSON = """["na na", "nana", "na nà", "na ná", "[unk]"]"""
         private const val CONSENT_GRAMMAR_JSON =
             """["ok", "ô kê", "ừ", "có", "được", "đồng ý", "không", "thôi", "[unk]"]"""
+        private const val LOCAL_COMMAND_GRAMMAR_JSON =
+            """["bắt máy", "nghe máy", "cúp máy", "tắt cuộc gọi", "bật loa ngoài", "tắt loa ngoài", "bật đèn pin", "tắt đèn pin", "tạm biệt", "nghỉ nhé", "dừng lại", "[unk]"]"""
 
         private val json = Json { ignoreUnknownKeys = true }
 
@@ -184,7 +186,21 @@ class VoskWakeWordEngine(
          * Best-effort offline recognition of short Vietnamese consent replies from 16kHz PCM
          * when the Vosk model is installed locally, avoiding any paid network calls.
          */
-        fun recognizeConsentFromPcm(context: Context, pcmBytes: ByteArray): String? {
+        fun recognizeConsentFromPcm(context: Context, pcmBytes: ByteArray): String? =
+            recognizeWithGrammar(context, pcmBytes, CONSENT_GRAMMAR_JSON)
+
+        /**
+         * Best-effort offline recognition of narrow Vietnamese device-control commands from 16kHz PCM
+         * when the Vosk model is installed locally, keeping general conversation on raw audio.
+         */
+        fun recognizeLocalCommandFromPcm(context: Context, pcmBytes: ByteArray): String? =
+            recognizeWithGrammar(context, pcmBytes, LOCAL_COMMAND_GRAMMAR_JSON)
+
+        private fun recognizeWithGrammar(
+            context: Context,
+            pcmBytes: ByteArray,
+            grammarJson: String,
+        ): String? {
             val dir = modelDir(context.applicationContext)
             if (!isModelDirAvailable(dir) || pcmBytes.isEmpty()) {
                 return null
@@ -192,7 +208,7 @@ class VoskWakeWordEngine(
             return try {
                 LibVosk.setLogLevel(LogLevel.WARNINGS)
                 Model(dir.absolutePath).use { model ->
-                    Recognizer(model, BuiltInMicAudioInput.SAMPLE_RATE_HZ.toFloat(), CONSENT_GRAMMAR_JSON).use { rec ->
+                    Recognizer(model, BuiltInMicAudioInput.SAMPLE_RATE_HZ.toFloat(), grammarJson).use { rec ->
                         rec.acceptWaveForm(pcmBytes, pcmBytes.size)
                         extractTranscript(rec.finalResult)
                     }

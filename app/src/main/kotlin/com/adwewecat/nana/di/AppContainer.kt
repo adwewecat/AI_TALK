@@ -16,11 +16,15 @@ import com.adwewecat.nana.core.ai.GeminiClient
 import com.adwewecat.nana.core.ai.LlmRequest
 import com.adwewecat.nana.core.ai.LlmResult
 import com.adwewecat.nana.core.ai.OpenAiClient
+import com.adwewecat.nana.core.ai.PersonaPromptBuilder
 import com.adwewecat.nana.core.ai.TtsRouter
+import com.adwewecat.nana.core.ai.TtsResult
 import com.adwewecat.nana.core.model.ApiKeyEntry
 import com.adwewecat.nana.core.model.CallRecordingRecord
+import com.adwewecat.nana.core.model.KeyStatus
 import com.adwewecat.nana.core.model.MemoryCategory
 import com.adwewecat.nana.core.model.MemoryFact
+import com.adwewecat.nana.core.model.PersonaMode
 import com.adwewecat.nana.core.model.ProviderType
 import com.adwewecat.nana.core.model.QuotaState
 import com.adwewecat.nana.core.model.RecordingSource
@@ -40,10 +44,12 @@ import com.adwewecat.nana.data.local.toEntity
 import com.adwewecat.nana.data.sync.AndroidWifiNetworkChecker
 import com.adwewecat.nana.data.sync.DriveSyncDependencies
 import com.adwewecat.nana.data.sync.DriveSyncScheduler
+import com.adwewecat.nana.data.sync.DriveSyncWorker
 import com.adwewecat.nana.voice.AndroidAudioPlayer
 import com.adwewecat.nana.voice.AndroidSystemTtsEngine
 import com.adwewecat.nana.voice.NaNaVoiceOrchestrator
 import com.adwewecat.nana.voice.NaNaVoiceRuntime
+import com.adwewecat.nana.voice.NaNaVoiceService
 import com.adwewecat.nana.voice.SyncTrigger
 import com.adwewecat.nana.voice.VoiceLoopState
 import com.adwewecat.nana.voice.VoskWakeWordEngine
@@ -55,6 +61,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
@@ -67,6 +75,12 @@ class AppContainer internal constructor(
     val database: NaNaDatabase,
     val vault: EncryptedApiKeyVault,
     val httpClient: OkHttpClient = OkHttpClient(),
+    val geminiClient: GeminiClient = GeminiClient(httpClient),
+    val openAiClient: OpenAiClient = OpenAiClient(httpClient),
+    val claudeClient: ClaudeClient = ClaudeClient(httpClient),
+    val driveClient: GoogleDriveClient = GoogleDriveClient(httpClient),
+    val authManager: GoogleDriveAuthManager = GoogleDriveAuthManager(context.applicationContext, vault),
+    val syncMutex: Mutex = DriveSyncWorker.GLOBAL_SYNC_MUTEX,
 ) {
     constructor(context: Context) : this(
         context = context.applicationContext,
@@ -92,10 +106,6 @@ class AppContainer internal constructor(
     val keyPool: KeyPoolManager = KeyPoolManager(_keysFlow.value)
     val quotaStateMachine: NaNaQuotaStateMachine = NaNaQuotaStateMachine(keyPool)
 
-    val geminiClient: GeminiClient = GeminiClient(httpClient)
-    val openAiClient: OpenAiClient = OpenAiClient(httpClient)
-    val claudeClient: ClaudeClient = ClaudeClient(httpClient)
-
     val aiChatRouter: AiChatRouter = AiChatRouter(
         keyPool = keyPool,
         stateMachine = quotaStateMachine,
@@ -113,8 +123,6 @@ class AppContainer internal constructor(
     )
     val audioPlayer: AndroidAudioPlayer = AndroidAudioPlayer(appContext)
 
-    val driveClient: GoogleDriveClient = GoogleDriveClient(httpClient)
-    val authManager: GoogleDriveAuthManager = GoogleDriveAuthManager(appContext, vault)
     val wifiChecker: AndroidWifiNetworkChecker = AndroidWifiNetworkChecker(appContext)
     val syncScheduler: DriveSyncScheduler = DriveSyncScheduler(appContext)
     val syncStorageGateway: RoomSyncStorageGateway = RoomSyncStorageGateway(database)
@@ -166,6 +174,7 @@ class AppContainer internal constructor(
             val rawPcm = stripWavHeaderIfPresent(audioBytes)
             VoskWakeWordEngine.recognizeConsentFromPcm(appContext, rawPcm)
         },
+        backgroundScope = appScope,
     )
 
     /** Supplies shared Drive sync dependencies to [com.adwewecat.nana.data.sync.DriveSyncWorker]. */
@@ -175,6 +184,7 @@ class AppContainer internal constructor(
         authManager = authManager,
         wifiChecker = wifiChecker,
         driveClient = driveClient,
+        syncMutex = syncMutex,
     )
 
     /** Supplies shared voice dependencies to [com.adwewecat.nana.voice.NaNaVoiceService]. */
@@ -222,10 +232,9 @@ class AppContainer internal constructor(
         _keysFlow.value = updated
         quotaStateMachine.onSessionEnded()
 
-        val loopState = voiceOrchestrator.uiState.value.loopState
-        if (loopState == VoiceLoopState.STOPPED) {
+        if (voiceOrchestrator.uiState.value.loopState == VoiceLoopState.STOPPED) {
             voiceOrchestrator.markServiceStopped()
-        } else if (loopState == VoiceLoopState.IDLE_WAKE || loopState == VoiceLoopState.AWAITING_CONSENT) {
+        } else {
             voiceOrchestrator.stopSession()
         }
     }
@@ -242,6 +251,9 @@ class AppContainer internal constructor(
         val normalized = normalizeApiKeyEntry(entry)
         if (normalized.apiKey.isBlank()) {
             return "Chưa nhập API key."
+        }
+        if (normalized.isTtsOnly || normalized.modelId.contains("tts", ignoreCase = true)) {
+            return testTtsApiKey(normalized)
         }
         val probeRequest = LlmRequest(
             systemPrompt = "Trả lời ngắn gọn 1 từ: OK.",
@@ -270,11 +282,46 @@ class AppContainer internal constructor(
         }
     }
 
+    private suspend fun testTtsApiKey(normalized: ApiKeyEntry): String {
+        val ttsModel = normalized.modelId.ifBlank { DEFAULT_GEMINI_TTS_MODEL }
+        val result = when (normalized.provider) {
+            ProviderType.GEMINI_VERTEX_EXPRESS,
+            ProviderType.GEMINI_AI_STUDIO,
+            ProviderType.FREE_GEMINI,
+            -> geminiClient.synthesizeSpeech(
+                key = normalized,
+                text = "Xin chào anh",
+                styleInstruction = PersonaPromptBuilder.buildTtsStyleInstruction(PersonaMode.NANA),
+                voiceName = _settingsFlow.value.preferredGeminiVoice,
+                ttsModelId = ttsModel,
+            )
+
+            ProviderType.OPENAI,
+            ProviderType.FREE_OPENAI_COMPAT,
+            -> openAiClient.synthesizeSpeech(
+                key = normalized,
+                text = "Xin chào anh",
+            )
+
+            ProviderType.CLAUDE -> return "Claude không hỗ trợ endpoint TTS."
+        }
+        val displayedModel = if (normalized.provider in GEMINI_PROVIDERS) ttsModel else normalized.modelId.ifBlank { "tts-1" }
+        return when (result) {
+            is TtsResult.Success -> "Hợp lệ (TTS · ${providerDisplayName(normalized.provider)} · $displayedModel)"
+            is TtsResult.QuotaExceeded -> "Hết quota / giới hạn tốc độ TTS: ${result.detail}"
+            is TtsResult.Unsupported -> "Không hỗ trợ TTS: ${result.detail}"
+            is TtsResult.Error -> "Lỗi kiểm tra TTS: ${result.detail}"
+        }
+    }
+
     /** Sends a typed chat turn through [voiceOrchestrator] and refreshes key pool status. */
     suspend fun sendTextChat(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         voiceOrchestrator.onUserUtterance(transcript = trimmed, wavBytes = null)
+        if (!NaNaVoiceService.isRunning.value) {
+            voiceOrchestrator.stopSession()
+        }
         refreshKeyPoolSnapshot()
     }
 
@@ -286,17 +333,17 @@ class AppContainer internal constructor(
     }
 
     /** Triggers an immediate Drive backup strictly over unmetered Wi-Fi. */
-    suspend fun runManualWifiSync(): SyncOutcome {
+    suspend fun runManualWifiSync(): SyncOutcome = syncMutex.withLock {
         if (!wifiChecker.isUnmeteredWifiConnected()) {
             _lastSyncOutcome.value = SyncOutcome.PAUSED_NO_WIFI
-            return SyncOutcome.PAUSED_NO_WIFI
+            return@withLock SyncOutcome.PAUSED_NO_WIFI
         }
         _isSyncing.value = true
-        return try {
+        try {
             val accessToken = authManager.getFreshAccessToken()
             if (accessToken.isNullOrBlank()) {
                 _lastSyncOutcome.value = SyncOutcome.NEEDS_REAUTH
-                return SyncOutcome.NEEDS_REAUTH
+                return@withLock SyncOutcome.NEEDS_REAUTH
             }
             syncStorageGateway.resetStaleUploadingRecordings()
             val coordinator = WifiOnlySyncCoordinator(
@@ -316,17 +363,17 @@ class AppContainer internal constructor(
     }
 
     /** Restores backed-up memories and chat history from Google Drive (`AI_TALK_NaNa/`). */
-    suspend fun runRestore(allowMetered: Boolean = false): SyncOutcome {
+    suspend fun runRestore(allowMetered: Boolean = false): SyncOutcome = syncMutex.withLock {
         if (!allowMetered && !wifiChecker.isUnmeteredWifiConnected()) {
             _lastSyncOutcome.value = SyncOutcome.PAUSED_NO_WIFI
-            return SyncOutcome.PAUSED_NO_WIFI
+            return@withLock SyncOutcome.PAUSED_NO_WIFI
         }
         _isSyncing.value = true
-        return try {
+        try {
             val accessToken = authManager.getFreshAccessToken()
             if (accessToken.isNullOrBlank()) {
                 _lastSyncOutcome.value = SyncOutcome.NEEDS_REAUTH
-                return SyncOutcome.NEEDS_REAUTH
+                return@withLock SyncOutcome.NEEDS_REAUTH
             }
             val coordinator = DriveRestoreCoordinator(
                 wifiChecker = wifiChecker,
@@ -357,18 +404,39 @@ class AppContainer internal constructor(
             userAudio = AudioAttachment(bytes = bytes, mimeType = record.mimeType.ifBlank { "audio/mp4" }),
             enableTools = false,
         )
-        val candidateKey = keyPool.nextHealthyPaidChatKey() ?: keyPool.nextHealthyFreeChatKey() ?: return null
-        val result = when (candidateKey.provider) {
-            ProviderType.GEMINI_VERTEX_EXPRESS,
-            ProviderType.GEMINI_AI_STUDIO,
-            ProviderType.FREE_GEMINI,
-            -> geminiClient.generate(candidateKey, prompt)
+        val candidateKeys = keyPool.snapshot()
+            .filter { entry ->
+                entry.enabled &&
+                    entry.status == KeyStatus.HEALTHY &&
+                    !entry.isTtsOnly &&
+                    entry.apiKey.isNotBlank() &&
+                    entry.provider in GEMINI_PROVIDERS
+            }
+            .sortedWith(compareBy<ApiKeyEntry> { it.isFreeTier }.thenBy { it.priority })
 
-            else -> return null
+        for (candidateKey in candidateKeys) {
+            when (val result = geminiClient.generate(candidateKey, prompt)) {
+                is LlmResult.Success -> {
+                    val summary = result.replyText.trim().takeIf { it.isNotEmpty() }
+                    if (summary != null) {
+                        database.callRecordingDao().updateAiSummary(record.id, summary)
+                        refreshKeyPoolSnapshot()
+                        return summary
+                    }
+                }
+                is LlmResult.QuotaExceeded -> {
+                    keyPool.markChatQuotaExhausted(candidateKey.id)
+                    refreshKeyPoolSnapshot()
+                }
+                is LlmResult.InvalidKey -> {
+                    keyPool.markChatInvalid(candidateKey.id)
+                    refreshKeyPoolSnapshot()
+                }
+                is LlmResult.TransientError -> Unit
+            }
         }
-        val summary = (result as? LlmResult.Success)?.replyText?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        database.callRecordingDao().updateAiSummary(record.id, summary)
-        return summary
+        refreshKeyPoolSnapshot()
+        return null
     }
 
     /** Adds a manual user [MemoryFact] and schedules Wi-Fi sync. */
@@ -478,7 +546,13 @@ class AppContainer internal constructor(
 
     companion object {
         private const val MAX_SUMMARY_AUDIO_BYTES = 12L * 1024L * 1024L
+        private const val DEFAULT_GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
         private const val FALLBACK_VAULT_PREFS = "nana_robolectric_vault"
+        private val GEMINI_PROVIDERS = setOf(
+            ProviderType.GEMINI_VERTEX_EXPRESS,
+            ProviderType.GEMINI_AI_STUDIO,
+            ProviderType.FREE_GEMINI,
+        )
 
         fun providerDisplayName(provider: ProviderType): String = when (provider) {
             ProviderType.GEMINI_VERTEX_EXPRESS -> "Gemini Vertex (AQ.)"
@@ -489,19 +563,16 @@ class AppContainer internal constructor(
             ProviderType.FREE_OPENAI_COMPAT -> "OpenAI-Compat Free"
         }
 
-        private fun createVaultSafely(appContext: Context): EncryptedApiKeyVault {
-            if ("robolectric".equals(Build.FINGERPRINT, ignoreCase = true)) {
+        internal fun createVaultSafely(
+            appContext: Context,
+            fingerprint: String = Build.FINGERPRINT,
+        ): EncryptedApiKeyVault {
+            if ("robolectric".equals(fingerprint, ignoreCase = true)) {
                 return EncryptedApiKeyVault(
                     appContext.getSharedPreferences(FALLBACK_VAULT_PREFS, Context.MODE_PRIVATE),
                 )
             }
-            return runCatching {
-                EncryptedApiKeyVault.create(appContext)
-            }.getOrElse {
-                EncryptedApiKeyVault(
-                    appContext.getSharedPreferences(FALLBACK_VAULT_PREFS, Context.MODE_PRIVATE),
-                )
-            }
+            return EncryptedApiKeyVault.create(appContext)
         }
     }
 }

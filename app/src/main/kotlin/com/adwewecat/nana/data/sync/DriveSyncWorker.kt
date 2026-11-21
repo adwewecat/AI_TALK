@@ -24,6 +24,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
@@ -35,6 +37,7 @@ data class DriveSyncDependencies(
     val wifiChecker: WifiNetworkChecker,
     val driveClient: GoogleDriveClient,
     val clockMs: () -> Long = { System.currentTimeMillis() },
+    val syncMutex: Mutex = DriveSyncWorker.GLOBAL_SYNC_MUTEX,
 )
 
 /** Implemented by `Application` (or test factories) to supply shared [DriveSyncDependencies]. */
@@ -71,41 +74,43 @@ class DriveSyncWorker : CoroutineWorker {
         val ownsAuthManager = customProvider == null
         val deps = customProvider?.provideDriveSyncDependencies() ?: createDefaultDependencies(applicationContext)
         try {
-            if (!deps.wifiChecker.isUnmeteredWifiConnected()) {
-                return Result.retry()
-            }
-
-            val authStatus = deps.authManager.authStateFlow.value
-            if (authStatus.needsReauth) {
-                return Result.failure()
-            }
-
-            val accessToken = deps.authManager.getFreshAccessToken()
-            if (accessToken.isNullOrBlank()) {
-                val updatedStatus = deps.authManager.authStateFlow.value
-                return when {
-                    updatedStatus.needsReauth -> Result.failure()
-                    !updatedStatus.isSignedIn -> Result.success()
-                    else -> Result.retry()
+            return deps.syncMutex.withLock {
+                if (!deps.wifiChecker.isUnmeteredWifiConnected()) {
+                    return@withLock Result.retry()
                 }
-            }
 
-            val storage = RoomSyncStorageGateway(deps.database)
-            storage.resetStaleUploadingRecordings()
-
-            val outcome = runSyncWithLiveWifiGuard(deps, storage, accessToken)
-                ?: return Result.retry()
-
-            return when (outcome) {
-                SyncOutcome.COMPLETED -> {
-                    cleanupExpiredStagedRecordings(deps, storage)
-                    Result.success()
+                val authStatus = deps.authManager.authStateFlow.value
+                if (authStatus.needsReauth) {
+                    return@withLock Result.failure()
                 }
-                SyncOutcome.PAUSED_NO_WIFI -> Result.retry()
-                SyncOutcome.RETRYABLE_ERROR -> Result.retry()
-                SyncOutcome.NEEDS_REAUTH -> {
-                    deps.authManager.markNeedsReauth()
-                    Result.failure()
+
+                val accessToken = deps.authManager.getFreshAccessToken()
+                if (accessToken.isNullOrBlank()) {
+                    val updatedStatus = deps.authManager.authStateFlow.value
+                    return@withLock when {
+                        updatedStatus.needsReauth -> Result.failure()
+                        !updatedStatus.isSignedIn -> Result.success()
+                        else -> Result.retry()
+                    }
+                }
+
+                val storage = RoomSyncStorageGateway(deps.database)
+                storage.resetStaleUploadingRecordings()
+
+                val outcome = runSyncWithLiveWifiGuard(deps, storage, accessToken)
+                    ?: return@withLock Result.retry()
+
+                when (outcome) {
+                    SyncOutcome.COMPLETED -> {
+                        cleanupExpiredStagedRecordings(deps, storage)
+                        Result.success()
+                    }
+                    SyncOutcome.PAUSED_NO_WIFI -> Result.retry()
+                    SyncOutcome.RETRYABLE_ERROR -> Result.retry()
+                    SyncOutcome.NEEDS_REAUTH -> {
+                        deps.authManager.markNeedsReauth()
+                        Result.failure()
+                    }
                 }
             }
         } finally {
@@ -222,8 +227,11 @@ class DriveSyncWorker : CoroutineWorker {
         }
     }
 
-    private companion object {
-        fun createDefaultDependencies(appContext: Context): DriveSyncDependencies {
+    companion object {
+        /** Shared process-wide mutex preventing concurrent Drive sync/restore races across WorkManager and manual triggers. */
+        val GLOBAL_SYNC_MUTEX = Mutex()
+
+        private fun createDefaultDependencies(appContext: Context): DriveSyncDependencies {
             val db = NaNaDatabase.getInstance(appContext)
             val vault = EncryptedApiKeyVault.create(appContext)
             val authManager = GoogleDriveAuthManager(appContext, vault)

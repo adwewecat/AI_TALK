@@ -34,6 +34,9 @@ class NaNaQuotaStateMachine(
     val activePersona: PersonaMode
         get() = _activePersona
 
+    /** Returns true when at least one paid chat key in [keyPool] is healthy. */
+    fun hasHealthyPaidChatKey(): Boolean = keyPool.hasAnyHealthyPaidChatKey()
+
     /** Evaluates key availability upon wake word and either resumes Na Na or asks for consent. */
     fun onWakeWord(): WakeResult = synchronized(lock) {
         if (keyPool.hasAnyHealthyPaidChatKey()) {

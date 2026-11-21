@@ -557,6 +557,19 @@ class LlmProviderClientsTest {
         val invalidClaude = claude403 as LlmResult.InvalidKey
         assertEquals(403, invalidClaude.httpCode)
         assertFalse(invalidClaude.detail.contains(cKey.apiKey))
+
+        val requestsBeforeReject = server.requestCount
+        val audioOnlyWithHistory = claude.generate(
+            key = cKey,
+            request = LlmRequest(
+                systemPrompt = "s",
+                history = sampleHistory(),
+                userText = null,
+                userAudio = AudioAttachment(bytes = byteArrayOf(1, 2, 3), mimeType = "audio/wav"),
+            ),
+        )
+        assertTrue(audioOnlyWithHistory is LlmResult.TransientError)
+        assertEquals(requestsBeforeReject, server.requestCount)
     }
 
     @Test

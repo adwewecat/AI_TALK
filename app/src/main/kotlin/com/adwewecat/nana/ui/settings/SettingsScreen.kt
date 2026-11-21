@@ -18,7 +18,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccessibilityNew
 import androidx.compose.material.icons.rounded.Add
@@ -810,7 +812,10 @@ private fun ApiKeyEditorDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (existing == null) "Thêm API Key mới" else "Sửa API Key") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -827,9 +832,8 @@ private fun ApiKeyEditorDialog(
                                 (type == ProviderType.GEMINI_VERTEX_EXPRESS && provider == ProviderType.GEMINI_AI_STUDIO),
                             onClick = {
                                 provider = type
-                                if (type == ProviderType.FREE_GEMINI || type == ProviderType.FREE_OPENAI_COMPAT) {
-                                    isFreeTier = true
-                                }
+                                isFreeTier = type == ProviderType.FREE_GEMINI ||
+                                    type == ProviderType.FREE_OPENAI_COMPAT
                                 if (existing == null) {
                                     modelId = defaultModelFor(type)
                                 }

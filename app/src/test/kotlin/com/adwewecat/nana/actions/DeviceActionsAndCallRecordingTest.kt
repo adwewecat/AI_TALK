@@ -141,6 +141,7 @@ class DeviceActionsAndCallRecordingTest {
             "com.android.incallui",
             "com.android.dialer",
             "com.vivo.dialer",
+            "com.vivo.incallui",
             "com.google.android.dialer",
             "com.zing.zalo",
             "com.facebook.orca",

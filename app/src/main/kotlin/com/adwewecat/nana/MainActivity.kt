@@ -122,16 +122,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun toggleVoiceService(enable: Boolean) {
+    internal fun toggleVoiceService(enable: Boolean) {
         if (enable) {
             container.updateSettings { it.copy(wakeWordEnabled = true) }
             startVoiceActionWithPermission(NaNaVoiceService.ACTION_START)
-        } else {
+        } else if (NaNaVoiceService.isRunning.value) {
             runCatching {
-                startService(
-                    Intent(this, NaNaVoiceService::class.java)
-                        .setAction(NaNaVoiceService.ACTION_STOP),
-                )
+                stopService(Intent(this, NaNaVoiceService::class.java))
             }
         }
     }

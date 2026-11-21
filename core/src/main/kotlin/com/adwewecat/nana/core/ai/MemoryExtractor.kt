@@ -133,7 +133,7 @@ class MemoryExtractor(
         val parsed = primitive.floatOrNull
             ?: primitive.contentOrNull?.trim()?.toFloatOrNull()
             ?: return DEFAULT_CONFIDENCE
-        return parsed.coerceIn(0.0f, 1.0f)
+        return parsed.takeIf { it.isFinite() }?.coerceIn(0.0f, 1.0f) ?: DEFAULT_CONFIDENCE
     }
 
     private fun buildFactId(nowMs: Long, index: Int, key: String): String {

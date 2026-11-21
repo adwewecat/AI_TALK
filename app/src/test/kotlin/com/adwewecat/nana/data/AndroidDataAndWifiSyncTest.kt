@@ -579,6 +579,119 @@ class AndroidDataAndWifiSyncTest {
         assertEquals(SyncStatus.SYNCED.name, db.callRecordingDao().getById("rec-pending")?.syncStatus)
     }
 
+    @Test(timeout = 15_000)
+    fun driveSyncWorkerAndAppContainerShareGlobalSyncMutex() = runBlocking {
+        val prefs = context.getSharedPreferences("test_vault_mutex", Context.MODE_PRIVATE)
+        prefs.edit().clear().commit()
+        val vault = EncryptedApiKeyVault(prefs)
+
+        val tokenUrl = server.url("/oauth2/token").toString()
+        val serviceConfig = AuthorizationServiceConfiguration(
+            Uri.parse("https://accounts.google.com/o/oauth2/v2/auth"),
+            Uri.parse(tokenUrl),
+        )
+        val clientId = "mutex-client.apps.googleusercontent.com"
+        val authRequest = AuthorizationRequest.Builder(
+            serviceConfig,
+            clientId,
+            ResponseTypeValues.CODE,
+            Uri.parse("com.googleusercontent.apps.mutex-client:/oauth2redirect"),
+        ).build()
+        val authResponse = AuthorizationResponse.Builder(authRequest)
+            .setAuthorizationCode("code-mutex")
+            .setState(authRequest.state)
+            .build()
+        val validTokenResponse = TokenResponse.Builder(authResponse.createTokenExchangeRequest())
+            .setAccessToken("fresh-mutex-access-token")
+            .setTokenType("Bearer")
+            .setAccessTokenExpirationTime(System.currentTimeMillis() + 3_600_000L)
+            .setRefreshToken("mutex-refresh-token")
+            .build()
+        val authState = AuthState(authResponse, null).apply { update(validTokenResponse, null) }
+        vault.saveAuthStateJson(authState.jsonSerializeString())
+        db.messageDao().upsert(sampleMessage("msg-mutex-1", "Test mutex", synced = false).toEntity())
+        RoomSyncStorageGateway(db).saveFolderIds(
+            SyncFolderIds("f-root", "f-profile", "f-history", "f-rec", "f-manifest"),
+        )
+
+        val restoreReachedServer = AtomicBoolean(false)
+        val workerActive = AtomicBoolean(false)
+        val workerInDriveLatch = CountDownLatch(1)
+        val releaseWorkerLatch = CountDownLatch(1)
+        val baseUrl = server.url("/").toString().trimEnd('/')
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                if (request.getHeader("X-Caller") == "restore") {
+                    restoreReachedServer.set(true)
+                } else if (workerActive.get()) {
+                    workerInDriveLatch.countDown()
+                    releaseWorkerLatch.await(5, TimeUnit.SECONDS)
+                }
+                return when (request.method) {
+                    "GET" -> MockResponse().setResponseCode(200).setBody("""{"files":[]}""")
+                    else -> MockResponse().setResponseCode(200).setBody("""{"id":"drv-mutex-1"}""")
+                }
+            }
+        }
+
+        val restoreClient = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                chain.proceed(chain.request().newBuilder().header("X-Caller", "restore").build())
+            }
+            .build()
+        val authManager = GoogleDriveAuthManager(context, vault, clientId)
+        val container = com.adwewecat.nana.di.AppContainer(
+            context = context,
+            database = db,
+            vault = vault,
+            httpClient = OkHttpClient(),
+            driveClient = GoogleDriveClient(restoreClient, apiBaseUrl = baseUrl),
+            authManager = authManager,
+        )
+        assertTrue(container.syncMutex === DriveSyncWorker.GLOBAL_SYNC_MUTEX)
+        assertTrue(container.provideDriveSyncDependencies().syncMutex === DriveSyncWorker.GLOBAL_SYNC_MUTEX)
+
+        val depsProvider = object : DriveSyncDependenciesProvider {
+            override fun provideDriveSyncDependencies(): DriveSyncDependencies = DriveSyncDependencies(
+                database = db,
+                vault = vault,
+                authManager = authManager,
+                wifiChecker = object : WifiNetworkChecker {
+                    override fun isUnmeteredWifiConnected(): Boolean = true
+                },
+                driveClient = GoogleDriveClient(OkHttpClient(), apiBaseUrl = baseUrl),
+            )
+        }
+        val factory = object : WorkerFactory() {
+            override fun createWorker(
+                appContext: Context,
+                workerClassName: String,
+                workerParameters: WorkerParameters,
+            ): ListenableWorker = DriveSyncWorker(appContext, workerParameters, depsProvider)
+        }
+        val worker = TestListenableWorkerBuilder<DriveSyncWorker>(context)
+            .setWorkerFactory(factory)
+            .build()
+
+        workerActive.set(true)
+        val workerJob = async(Dispatchers.IO) { worker.doWork() }
+        assertTrue(workerInDriveLatch.await(5, TimeUnit.SECONDS))
+
+        val restoreJob = async(Dispatchers.Default) {
+            container.runRestore(allowMetered = true)
+        }
+        kotlinx.coroutines.delay(150)
+        assertFalse("runRestore must wait while DriveSyncWorker holds GLOBAL_SYNC_MUTEX", restoreReachedServer.get())
+        assertFalse(restoreJob.isCompleted)
+
+        workerActive.set(false)
+        releaseWorkerLatch.countDown()
+        assertEquals(ListenableWorker.Result.success(), workerJob.await())
+        val restoreOutcome = restoreJob.await()
+        assertEquals(com.adwewecat.nana.core.sync.SyncOutcome.COMPLETED, restoreOutcome)
+        assertTrue(restoreReachedServer.get())
+    }
+
     private fun <T> runWithRobolectricLooper(block: suspend () -> T): T = runBlocking {
         val deferred = async(Dispatchers.Default) { block() }
         val mainLooper = shadowOf(Looper.getMainLooper())

@@ -612,4 +612,68 @@ class AiAndTtsRouterTest {
         assertNotNull(style)
         assertTrue(style.isNotBlank())
     }
+
+    @Test
+    fun memoryExtractorGuardsNonFiniteConfidenceValues() {
+        val extractor = MemoryExtractor()
+        val raw = """
+            [
+              {"category":"FACT","key":"nan_num","value":"v1","confidence":"NaN"},
+              {"category":"FACT","key":"inf_num","value":"v2","confidence":"Infinity"},
+              {"category":"FACT","key":"neg_inf","value":"v3","confidence":"-Infinity"}
+            ]
+        """.trimIndent()
+        val facts = extractor.parseExtractedFacts(raw, nowMs = 5_000L)
+        assertEquals(3, facts.size)
+        facts.forEach { fact ->
+            assertTrue(fact.confidence.isFinite())
+            assertTrue(fact.confidence in 0.0f..1.0f)
+        }
+    }
+
+    @Test
+    fun chatRouterSkipsNonGeminiKeysOnEmptyAudioTranscriptAndFallsBackToGemini() = runTest {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody(
+                    """
+                    {
+                      "candidates": [
+                        {
+                          "content": {
+                            "parts": [
+                              { "text": "Dạ em nghe giọng anh qua Gemini rồi nè!" }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                    """.trimIndent(),
+                ),
+        )
+
+        val keyPool = KeyPoolManager(
+            initialKeys = listOf(
+                paidClaudeKey(id = "claude-1", priority = 1),
+                paidGeminiKey(id = "gemini-2", priority = 2),
+            ),
+            clockMs = { 10_000L },
+        )
+        val stateMachine = NaNaQuotaStateMachine(keyPool)
+        val router = AiChatRouter(keyPool, stateMachine, geminiClient, openAiClient, claudeClient)
+
+        val reply = router.sendTurn(
+            history = emptyList(),
+            memories = emptyList(),
+            userText = null,
+            userAudio = AudioAttachment(bytes = byteArrayOf(0x52, 0x49, 0x46, 0x46), mimeType = "audio/wav"),
+        )
+
+        assertEquals("gemini-2", reply.usedKeyId)
+        assertEquals("Dạ em nghe giọng anh qua Gemini rồi nè!", reply.replyText)
+        assertEquals(1, server.requestCount)
+        assertTrue(server.takeRequest().path!!.contains("generateContent"))
+        assertEquals(KeyStatus.HEALTHY, keyPool.snapshot().first { it.id == "claude-1" }.status)
+    }
 }

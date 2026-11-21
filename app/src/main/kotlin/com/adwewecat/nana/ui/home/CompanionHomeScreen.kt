@@ -493,7 +493,7 @@ private fun WifiSyncPill(
         color = MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(50),
         border = BorderStroke(1.dp, tint.copy(alpha = 0.35f)),
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier.clickable(enabled = !isSyncing, onClick = onClick),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),

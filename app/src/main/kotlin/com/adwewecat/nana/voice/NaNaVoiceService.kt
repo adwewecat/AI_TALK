@@ -26,6 +26,7 @@ import com.adwewecat.nana.core.model.DeviceCommand
 import com.adwewecat.nana.core.quota.KeyPoolManager
 import com.adwewecat.nana.core.quota.NaNaQuotaStateMachine
 import com.adwewecat.nana.core.voice.EnergyVad
+import com.adwewecat.nana.core.voice.FastCommandParser
 import com.adwewecat.nana.core.voice.PcmWavEncoder
 import com.adwewecat.nana.core.voice.VadEvent
 import com.adwewecat.nana.data.local.AppSettings
@@ -260,12 +261,17 @@ class NaNaVoiceService : Service() {
             }
 
             val wavBytes = PcmWavEncoder.encodeMono16Bit(capturedPcm, BuiltInMicAudioInput.SAMPLE_RATE_HZ)
-            val offlineTranscript = if (loopState == VoiceLoopState.AWAITING_CONSENT) {
-                withContext(Dispatchers.Default) {
-                    VoskWakeWordEngine.recognizeConsentFromPcm(this@NaNaVoiceService, capturedPcm)
+            val offlineTranscript = withContext(Dispatchers.Default) {
+                when (loopState) {
+                    VoiceLoopState.AWAITING_CONSENT ->
+                        VoskWakeWordEngine.recognizeConsentFromPcm(this@NaNaVoiceService, capturedPcm)
+
+                    VoiceLoopState.LISTENING ->
+                        VoskWakeWordEngine.recognizeLocalCommandFromPcm(this@NaNaVoiceService, capturedPcm)
+                            ?.takeIf { FastCommandParser.parseLocalCommand(it) != null }
+
+                    else -> null
                 }
-            } else {
-                null
             }
             orchestrator.onUserUtterance(transcript = offlineTranscript, wavBytes = wavBytes)
         }
@@ -494,6 +500,7 @@ class NaNaVoiceService : Service() {
                 }
                 VoskWakeWordEngine.recognizeConsentFromPcm(appContext, rawPcm)
             },
+            backgroundScope = serviceScope,
         )
         return NaNaVoiceRuntime(
             orchestrator = orchestrator,

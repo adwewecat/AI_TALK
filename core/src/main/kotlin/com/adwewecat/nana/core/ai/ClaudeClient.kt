@@ -23,7 +23,7 @@ class ClaudeClient(
             return LlmResult.InvalidKey(httpCode = 401, detail = "Missing Claude API key")
         }
 
-        if (request.userText.isNullOrBlank() && request.history.isEmpty() && request.userAudio != null) {
+        if (request.userText.isNullOrBlank() && request.userAudio != null) {
             return LlmResult.TransientError("Claude Messages API requires transcribed text input")
         }
 

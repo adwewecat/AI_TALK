@@ -9,6 +9,7 @@ import com.adwewecat.nana.core.ai.TtsRouter
 import com.adwewecat.nana.core.model.ChatMessage
 import com.adwewecat.nana.core.model.DeviceActionExecutor
 import com.adwewecat.nana.core.model.DeviceCommand
+import com.adwewecat.nana.core.model.MemoryCategory
 import com.adwewecat.nana.core.model.PersonaMode
 import com.adwewecat.nana.core.model.QuotaState
 import com.adwewecat.nana.core.quota.NaNaQuotaStateMachine
@@ -18,11 +19,16 @@ import com.adwewecat.nana.data.local.MemoryFactDao
 import com.adwewecat.nana.data.local.MessageDao
 import com.adwewecat.nana.data.local.toDomain
 import com.adwewecat.nana.data.local.toEntity
+import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -71,9 +77,12 @@ class NaNaVoiceOrchestrator(
     private val offlineConsentTranscriber: (ByteArray) -> String? = { null },
     private val clockMs: () -> Long = { System.currentTimeMillis() },
     private val idGenerator: () -> String = { UUID.randomUUID().toString() },
+    private val backgroundScope: CoroutineScope? = null,
 ) {
 
     private val turnMutex = Mutex()
+    private val memoryExtractionMutex = Mutex()
+    private val tiredPromptPrecacheAttempted = AtomicBoolean(false)
     private val _uiState = MutableStateFlow(
         VoiceUiSnapshot(
             loopState = VoiceLoopState.IDLE_WAKE,
@@ -84,6 +93,9 @@ class NaNaVoiceOrchestrator(
 
     @Volatile
     private var currentSessionId: String? = null
+
+    @Volatile
+    private var currentSessionMessageCount: Int = 0
 
     val uiState: StateFlow<VoiceUiSnapshot> = _uiState.asStateFlow()
 
@@ -236,22 +248,57 @@ class NaNaVoiceOrchestrator(
      * when explicitly invoked outside real-time utterance latency.
      */
     suspend fun extractMemoriesFromRecentSession(recentLimit: Int = 10) {
-        val recent = messageDao.getAll().takeLast(recentLimit).map { it.toDomain() }
-        if (recent.isEmpty()) return
-
-        val prompt = memoryExtractor.buildExtractionPrompt(recent)
-        val existingMemories = memoryFactDao.getAll().map { it.toDomain() }
-        val reply = aiChatRouter.sendTurn(
-            history = emptyList(),
-            memories = existingMemories,
-            userText = prompt,
-            userAudio = null,
-        )
-        val extracted = memoryExtractor.parseExtractedFacts(reply.replyText, nowMs = clockMs())
-        if (extracted.isNotEmpty()) {
-            extracted.forEach { fact -> memoryFactDao.upsert(fact.toEntity()) }
-            syncTrigger.enqueueWifiSync()
+        if (stateMachine.state == QuotaState.NANA_TIRED ||
+            stateMachine.state == QuotaState.NANA_TIRED_AWAITING_CONSENT
+        ) {
+            return
         }
+        if (stateMachine.state == QuotaState.ACTIVE_NANA && !stateMachine.hasHealthyPaidChatKey()) {
+            return
+        }
+
+        memoryExtractionMutex.withLock {
+            try {
+                val recent = messageDao.getAll().takeLast(recentLimit).map { it.toDomain() }
+                if (recent.isEmpty()) return@withLock
+
+                val prompt = memoryExtractor.buildExtractionPrompt(recent)
+                val existingMemories = memoryFactDao.getAll().map { it.toDomain() }
+                val reply = aiChatRouter.sendTurn(
+                    history = emptyList(),
+                    memories = existingMemories,
+                    userText = prompt,
+                    userAudio = null,
+                    enableTools = false,
+                    transitionOnExhausted = false,
+                )
+                val extracted = memoryExtractor.parseExtractedFacts(reply.replyText, nowMs = clockMs())
+                if (extracted.isNotEmpty()) {
+                    val existingByPair = existingMemories.associateByTo(mutableMapOf()) {
+                        normalizedMemoryKey(it.category, it.key)
+                    }
+                    extracted.forEach { fact ->
+                        val pair = normalizedMemoryKey(fact.category, fact.key)
+                        val existing = existingByPair[pair]
+                        val merged = if (existing != null) fact.copy(id = existing.id) else fact
+                        existingByPair[pair] = merged
+                        memoryFactDao.upsert(merged.toEntity())
+                    }
+                    syncTrigger.enqueueWifiSync()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Background memory extraction must never disrupt active voice sessions or surface errors.
+            }
+        }
+    }
+
+    private fun normalizedMemoryKey(category: MemoryCategory, key: String): Pair<MemoryCategory, String> {
+        val normalized = FastCommandParser.normalizeVietnamese(key).ifEmpty {
+            key.trim().lowercase(Locale.ROOT)
+        }
+        return category to normalized
     }
 
     private suspend fun handleConsentUtterance(transcript: String?, wavBytes: ByteArray?) {
@@ -438,6 +485,7 @@ class NaNaVoiceOrchestrator(
                 synced = false,
             ).toEntity(),
         )
+        currentSessionMessageCount++
 
         val assistantContent = reply.replyText.ifBlank { lastActionFeedback.orEmpty() }
         if (assistantContent.isNotBlank()) {
@@ -453,6 +501,7 @@ class NaNaVoiceOrchestrator(
                     synced = false,
                 ).toEntity(),
             )
+            currentSessionMessageCount++
         }
         syncTrigger.enqueueWifiSync()
 
@@ -497,8 +546,31 @@ class NaNaVoiceOrchestrator(
 
     private suspend fun speakViaTtsRouter(text: String, persona: PersonaMode) {
         when (val spoken = ttsRouter.synthesizeOrSpeak(text, persona, settingsProvider().preferredGeminiVoice)) {
-            is SpokenOutput.CloudPcm ->
+            is SpokenOutput.CloudPcm -> {
                 audioPlayer.playPcm(spoken.audio.pcmBytes, spoken.audio.sampleRateHz)
+                if (backgroundScope != null &&
+                    persona == PersonaMode.NANA &&
+                    audioPlayer.getCachedTiredPrompt() == null &&
+                    tiredPromptPrecacheAttempted.compareAndSet(false, true)
+                ) {
+                    backgroundScope.launch {
+                        try {
+                            val audio = ttsRouter.synthesizeCloudOnly(
+                                text = NaNaQuotaStateMachine.TIRED_CONSENT_PROMPT,
+                                persona = PersonaMode.NANA,
+                                preferredGeminiVoice = settingsProvider().preferredGeminiVoice,
+                            )
+                            if (audio != null && audio.pcmBytes.isNotEmpty()) {
+                                audioPlayer.cacheTiredPrompt(audio.pcmBytes)
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Throwable) {
+                            // Best-effort offline prompt cache should never crash or surface errors.
+                        }
+                    }
+                }
+            }
 
             SpokenOutput.SpokenByLocalFallback,
             SpokenOutput.Failed,
@@ -507,8 +579,10 @@ class NaNaVoiceOrchestrator(
     }
 
     private fun applyStopSession(loopState: VoiceLoopState) {
-        stateMachine.onSessionEnded()
+        val sessionMessageCount = currentSessionMessageCount
         currentSessionId = null
+        currentSessionMessageCount = 0
+        stateMachine.onSessionEnded()
         val newQuotaState = stateMachine.state
         val newPersona = stateMachine.activePersona
         _uiState.update {
@@ -524,11 +598,17 @@ class NaNaVoiceOrchestrator(
                 },
             )
         }
+        if (sessionMessageCount >= 2 && stateMachine.hasHealthyPaidChatKey()) {
+            backgroundScope?.launch {
+                extractMemoriesFromRecentSession()
+            }
+        }
     }
 
     private fun ensureSessionId(): String =
         currentSessionId ?: "session-${clockMs()}-${idGenerator().take(8)}".also {
             currentSessionId = it
+            currentSessionMessageCount = 0
         }
 
     private fun listeningMessageFor(persona: PersonaMode): String =
