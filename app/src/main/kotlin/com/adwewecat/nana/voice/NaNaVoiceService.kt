@@ -209,7 +209,10 @@ class NaNaVoiceService : Service() {
         activeLoopJob = serviceScope.launch {
             previousJob?.cancelAndJoin()
             val state = currentRuntime.orchestrator.uiState.value.loopState
-            if (state == VoiceLoopState.IDLE_WAKE || state == VoiceLoopState.STOPPED) {
+            if (state != VoiceLoopState.LISTENING && state != VoiceLoopState.AWAITING_CONSENT) {
+                if (state != VoiceLoopState.IDLE_WAKE && state != VoiceLoopState.STOPPED) {
+                    currentRuntime.orchestrator.stopSession()
+                }
                 currentRuntime.orchestrator.onWakeWordDetected()
             }
             runActiveTurnLoop(currentRuntime)
@@ -477,8 +480,19 @@ class NaNaVoiceService : Service() {
             memoryFactDao = db.memoryFactDao(),
             syncTrigger = SyncTrigger { scheduler.enqueueSync() },
             settingsProvider = settingsProvider,
-            offlineConsentTranscriber = { pcm ->
-                VoskWakeWordEngine.recognizeConsentFromPcm(appContext, pcm)
+            offlineConsentTranscriber = { audioBytes ->
+                val rawPcm = if (
+                    audioBytes.size > 44 &&
+                    audioBytes[0] == 'R'.code.toByte() &&
+                    audioBytes[1] == 'I'.code.toByte() &&
+                    audioBytes[2] == 'F'.code.toByte() &&
+                    audioBytes[3] == 'F'.code.toByte()
+                ) {
+                    audioBytes.copyOfRange(44, audioBytes.size)
+                } else {
+                    audioBytes
+                }
+                VoskWakeWordEngine.recognizeConsentFromPcm(appContext, rawPcm)
             },
         )
         return NaNaVoiceRuntime(
