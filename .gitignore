@@ -12,6 +12,7 @@
 
 # Build & Dependencies
 .gradle/
+.kotlin/
 app/build/
 core/build/
 local.properties
