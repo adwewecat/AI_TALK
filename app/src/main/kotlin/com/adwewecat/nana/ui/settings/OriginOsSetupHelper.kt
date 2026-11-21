@@ -50,6 +50,15 @@ object OriginOsSetupHelper {
     fun accessibilitySettingsIntent(): Intent =
         Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
 
+    /** Returns the Android Text-to-Speech settings intent (for selecting Google TTS vi-VN offline). */
+    fun ttsSettingsIntent(context: Context): Intent {
+        val ttsSettings = Intent("com.android.settings.TTS_SETTINGS")
+        if (canResolve(context, ttsSettings)) {
+            return ttsSettings
+        }
+        return Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+    }
+
     /** Returns the Android App Info settings intent scoped to this app package. */
     fun appDetailsIntent(context: Context): Intent =
         Intent(

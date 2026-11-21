@@ -38,10 +38,11 @@ class TtsRouter(
         persona: PersonaMode,
         preferredGeminiVoice: String = "Aoede",
     ): SpokenOutput {
-        if (text.isBlank()) return SpokenOutput.Failed
+        val cleanedText = TtsTextSanitizer.sanitizeForSpeech(text)
+        if (cleanedText.isBlank()) return SpokenOutput.Failed
 
         val cloudAudio = synthesizeCloudOnly(
-            text = text,
+            text = cleanedText,
             persona = persona,
             preferredGeminiVoice = preferredGeminiVoice,
         )
@@ -49,7 +50,7 @@ class TtsRouter(
             return SpokenOutput.CloudPcm(cloudAudio)
         }
 
-        return if (localFallback.speak(text, persona)) {
+        return if (localFallback.speak(cleanedText, persona)) {
             SpokenOutput.SpokenByLocalFallback
         } else {
             SpokenOutput.Failed

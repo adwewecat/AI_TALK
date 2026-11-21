@@ -331,7 +331,12 @@ class LlmProviderClientsTest {
         server.enqueue(
             MockResponse()
                 .setResponseCode(404)
-                .setBody("""{"error":{"code":404,"message":"Model not found"}}"""),
+                .setBody("""{"error":{"code":404,"message":"Preview model not found"}}"""),
+        )
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(404)
+                .setBody("""{"error":{"code":404,"message":"GA TTS model not found"}}"""),
         )
         server.enqueue(
             MockResponse()
@@ -383,6 +388,11 @@ class LlmProviderClientsTest {
         assertEquals(
             "/v1/publishers/google/models/gemini-2.5-flash-preview-tts:generateContent",
             vertexTtsRequest.path,
+        )
+        val vertexGaRetryRequest = server.takeRequest()
+        assertEquals(
+            "/v1/publishers/google/models/gemini-2.5-flash-tts:generateContent",
+            vertexGaRetryRequest.path,
         )
 
         val missingAudio = client.synthesizeSpeech(aiStudioKey, "Test", "Cute")

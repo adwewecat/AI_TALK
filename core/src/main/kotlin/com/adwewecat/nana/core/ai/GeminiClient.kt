@@ -61,10 +61,15 @@ class GeminiClient(
             return TtsResult.Error("Missing Gemini API key")
         }
 
+        val sanitizedText = TtsTextSanitizer.sanitizeForSpeech(text)
+        if (sanitizedText.isBlank()) {
+            return TtsResult.Error("Empty text for TTS")
+        }
+
         val promptText = if (styleInstruction.isNotBlank()) {
-            "${styleInstruction.trim()}\n$text"
+            "${styleInstruction.trim()}\n$sanitizedText"
         } else {
-            text
+            sanitizedText
         }
         val payload = buildJsonObject {
             putJsonArray("contents") {
@@ -87,7 +92,24 @@ class GeminiClient(
             }
         }
 
-        val url = resolveGenerateUrl(key = key, modelId = ttsModelId)
+        val primaryResult = postTtsPayload(key, trimmedKey, ttsModelId, payload)
+        // Vertex AI Express (`AQ.`) often exposes GA `gemini-2.5-flash-tts` instead of the preview suffix.
+        if (primaryResult is TtsResult.Unsupported &&
+            isVertexExpressKey(key) &&
+            ttsModelId.equals(DEFAULT_PREVIEW_TTS_MODEL, ignoreCase = true)
+        ) {
+            return postTtsPayload(key, trimmedKey, VERTEX_GA_TTS_MODEL, payload)
+        }
+        return primaryResult
+    }
+
+    private suspend fun postTtsPayload(
+        key: ApiKeyEntry,
+        trimmedKey: String,
+        modelId: String,
+        payload: JsonObject,
+    ): TtsResult {
+        val url = resolveGenerateUrl(key = key, modelId = modelId)
         val outcome = LlmHttpSupport.postJson(
             client = httpClient,
             url = url,
@@ -102,14 +124,17 @@ class GeminiClient(
         }
     }
 
-    private fun resolveGenerateUrl(key: ApiKeyEntry, modelId: String): String {
+    private fun isVertexExpressKey(key: ApiKeyEntry): Boolean {
         val trimmedKey = key.apiKey.trim()
-        // Explicit key prefix takes precedence over stored provider metadata so AQ. keys never hit v1beta.
-        val useVertexExpress = when {
+        return when {
             trimmedKey.startsWith("AQ.") -> true
             trimmedKey.startsWith("AIza") -> false
             else -> key.provider == ProviderType.GEMINI_VERTEX_EXPRESS
         }
+    }
+
+    private fun resolveGenerateUrl(key: ApiKeyEntry, modelId: String): String {
+        val useVertexExpress = isVertexExpressKey(key)
         val sanitizedModel = modelId.trim()
         return if (useVertexExpress) {
             "${vertexBaseUrl.trimEnd('/')}/v1/publishers/google/models/$sanitizedModel:generateContent"
@@ -305,6 +330,8 @@ class GeminiClient(
     private companion object {
         const val DEFAULT_SAMPLE_RATE_HZ = 24_000
         const val DEFAULT_PCM_MIME = "audio/L16;codec=pcm;rate=24000"
+        const val DEFAULT_PREVIEW_TTS_MODEL = "gemini-2.5-flash-preview-tts"
+        const val VERTEX_GA_TTS_MODEL = "gemini-2.5-flash-tts"
         val RATE_REGEX = Regex("rate=(\\d+)", RegexOption.IGNORE_CASE)
         val GEMINI_QUOTA_MARKERS = arrayOf("RESOURCE_EXHAUSTED", "quota")
     }

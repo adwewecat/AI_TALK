@@ -318,11 +318,16 @@ class AiAndTtsRouterTest {
 
     @Test
     fun ttsRouterUnsupportedAqKeyFallsBackWithoutBenchingChatKey() = runTest {
-        // 1. Vertex AQ. key fails TTS with 404 -> Unsupported
+        // 1. Vertex AQ. key fails TTS with 404 on both preview and GA TTS models -> Unsupported
         server.enqueue(
             MockResponse()
                 .setResponseCode(404)
-                .setBody("""{"error":{"code":404,"message":"TTS model not supported on Vertex Express"}}"""),
+                .setBody("""{"error":{"code":404,"message":"Preview TTS model not supported on Vertex Express"}}"""),
+        )
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(404)
+                .setBody("""{"error":{"code":404,"message":"GA TTS model not supported on Vertex Express"}}"""),
         )
         // 2. OpenAI key succeeds on TTS
         val expectedPcm = byteArrayOf(0x11, 0x22, 0x33, 0x44)

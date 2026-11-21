@@ -19,6 +19,7 @@ import com.adwewecat.nana.core.ai.OpenAiClient
 import com.adwewecat.nana.core.ai.PersonaPromptBuilder
 import com.adwewecat.nana.core.ai.TtsRouter
 import com.adwewecat.nana.core.ai.TtsResult
+import com.adwewecat.nana.core.ai.VietnameseWebTtsClient
 import com.adwewecat.nana.core.model.ApiKeyEntry
 import com.adwewecat.nana.core.model.CallRecordingRecord
 import com.adwewecat.nana.core.model.KeyStatus
@@ -51,6 +52,7 @@ import com.adwewecat.nana.voice.NaNaVoiceOrchestrator
 import com.adwewecat.nana.voice.NaNaVoiceRuntime
 import com.adwewecat.nana.voice.NaNaVoiceService
 import com.adwewecat.nana.voice.SyncTrigger
+import com.adwewecat.nana.voice.VietnameseFallbackTts
 import com.adwewecat.nana.voice.VoiceLoopState
 import com.adwewecat.nana.voice.VoskWakeWordEngine
 import java.io.File
@@ -114,7 +116,13 @@ class AppContainer internal constructor(
         claudeClient = claudeClient,
     )
 
-    val localFallbackTts: AndroidSystemTtsEngine = AndroidSystemTtsEngine(appContext)
+    val systemTtsEngine: AndroidSystemTtsEngine = AndroidSystemTtsEngine(appContext)
+    val webTtsClient: VietnameseWebTtsClient = VietnameseWebTtsClient(httpClient)
+    val localFallbackTts: VietnameseFallbackTts = VietnameseFallbackTts(
+        context = appContext,
+        webTtsClient = webTtsClient,
+        systemTts = systemTtsEngine,
+    )
     val ttsRouter: TtsRouter = TtsRouter(
         keyPool = keyPool,
         geminiClient = geminiClient,

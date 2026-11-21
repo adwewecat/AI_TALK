@@ -538,6 +538,13 @@ fun SettingsScreen(
                     icon = Icons.Rounded.Tune,
                     onClick = { OriginOsSetupHelper.launchSafely(context, OriginOsSetupHelper.autostartIntent(context)) },
                 )
+                ChecklistActionRow(
+                    title = "Giọng đọc tiếng Việt hệ thống (TTS offline)",
+                    subtitle = "Mặc định Na Na dùng giọng nữ tiếng Việt online; mở mục này để chọn Google TTS nếu muốn nghe cả khi mất mạng",
+                    granted = null,
+                    icon = Icons.Rounded.RecordVoiceOver,
+                    onClick = { OriginOsSetupHelper.launchSafely(context, OriginOsSetupHelper.ttsSettingsIntent(context)) },
+                )
             }
         }
     }

@@ -20,6 +20,7 @@ import com.adwewecat.nana.core.ai.ClaudeClient
 import com.adwewecat.nana.core.ai.GeminiClient
 import com.adwewecat.nana.core.ai.OpenAiClient
 import com.adwewecat.nana.core.ai.TtsRouter
+import com.adwewecat.nana.core.ai.VietnameseWebTtsClient
 import com.adwewecat.nana.core.model.ActionExecutionResult
 import com.adwewecat.nana.core.model.DeviceActionExecutor
 import com.adwewecat.nana.core.model.DeviceCommand
@@ -464,7 +465,12 @@ class NaNaVoiceService : Service() {
         val geminiClient = GeminiClient(httpClient)
         val openAiClient = OpenAiClient(httpClient)
         val claudeClient = ClaudeClient(httpClient)
-        val localTts = AndroidSystemTtsEngine(appContext).also { ownedFallbackTts = it }
+        val systemTts = AndroidSystemTtsEngine(appContext).also { ownedFallbackTts = it }
+        val localTts = VietnameseFallbackTts(
+            context = appContext,
+            webTtsClient = VietnameseWebTtsClient(httpClient),
+            systemTts = systemTts,
+        )
         val db = NaNaDatabase.getInstance(appContext)
         val scheduler = DriveSyncScheduler(appContext)
         val fallbackExecutor = object : DeviceActionExecutor {
