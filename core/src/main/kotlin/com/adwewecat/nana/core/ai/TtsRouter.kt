@@ -81,6 +81,7 @@ class TtsRouter(
                     text = text,
                     styleInstruction = styleInstruction,
                     voiceName = preferredGeminiVoice,
+                    ttsModelId = resolveGeminiTtsModel(key),
                 )
 
                 ProviderType.OPENAI,
@@ -103,5 +104,19 @@ class TtsRouter(
             }
         }
         return null
+    }
+
+    private fun resolveGeminiTtsModel(key: com.adwewecat.nana.core.model.ApiKeyEntry): String {
+        val model = key.modelId.trim()
+        if (key.isTtsOnly && model.isNotEmpty()) {
+            return model
+        }
+        return if (model.startsWith("gemini-3", ignoreCase = true) ||
+            model.startsWith("gemini-4", ignoreCase = true)
+        ) {
+            "gemini-3.8-flash-tts"
+        } else {
+            "gemini-2.5-flash-preview-tts"
+        }
     }
 }

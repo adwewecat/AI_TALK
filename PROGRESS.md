@@ -4,6 +4,11 @@
 
 ## Recent Milestones
 
+- **[2026-11-21] Live-tested Gemini `AQ.` keys, fixed AI Studio `AQ.` routing & `gemini-3.8-flash-tts` WAV decoding, added local-only key seeding**
+  - **Done:** Discovered via live API probing that 2026 Google AI Studio keys also use the `AQ.` prefix (returning HTTP 403 `Agent Platform API has not been used` on `aiplatform.googleapis.com` while succeeding on `generativelanguage.googleapis.com/v1beta`), and that `gemini-3.8-flash-tts` returns RIFF `audio/wav` (24kHz 16-bit mono) instead of raw PCM. Updated `GeminiClient` with automatic Vertex 403 -> AI Studio failover + per-key hash cache, `thought: true` part filtering, and RIFF/WAV PCM extraction; updated `TtsRouter` to use `gemini-3.8-flash-tts` for Gemini 3.x/4.x keys; increased `AppContainer` OkHttp timeouts (`15s/30s/20s`); updated `ModelCatalog` with live-verified models (`gemini-3-flash-preview`, `gemini-3.5-flash-lite`, `gemini-3.8-flash-lite-tts`); added `LocalSeedKeyBootstrapper` wired to gitignored `local.properties` -> `BuildConfig` (zero secrets committed to git). Verified 84/84 unit tests pass (`51 :core` + `33 :app`) and rebuilt `app-debug.apk`.
+  - **Issues Fixed:** Prevented HTTP 403 failures on AI Studio `AQ.` keys, eliminated RIFF header playback clicks on Gemini 3.8 Neural TTS, guarded against speaking reasoning `thought` text aloud, and pre-bundled personal keys locally without leaking secrets to GitHub.
+  - **Next:** Install the rebuilt `app-debug.apk` onto iQOO Z10 Turbo Pro — both Gemini Pro keys are pre-loaded and verified live.
+
 - **[2026-11-21] Added Gemini 3.6 / 3.8 / 4.x model catalog, 1-tap picker chips & Vertex `v1beta1` fallback**
   - **Done:** Updated Gemini Pro defaults from `gemini-2.5-flash` to `gemini-3.8-flash` (Free -> `gemini-3.6-flash`, TTS -> `gemini-3.8-flash-tts`), added `ModelCatalog` with 1-tap quick-select chips in `SettingsScreen` (`gemini-4-neon`, `gemini-4-carbon`, `gemini-4-argon`, `gemini-4-hydrogen`, `gemini-3.8-flash`, `gemini-3.6-flash`, `gemini-3.1-pro`, `gemini-2.5-flash`, plus TTS/Claude/ChatGPT options), and added automatic `/v1` -> `/v1beta1` HTTP 404 fallback in `GeminiClient` for Vertex AI Express `AQ.` keys.
   - **Issues Fixed:** Settings dialog previously defaulted only to `gemini-2.5-flash` without quick-pick chips for newer Gemini 3.6 / 3.8 / 4.x models.

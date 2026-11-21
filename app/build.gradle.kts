@@ -32,6 +32,17 @@ val escapedGoogleOauthClientId = googleOauthClientId
     .replace("\\", "\\\\")
     .replace("\"", "\\\"")
 
+fun readLocalOrEnv(name: String, defaultValue: String = ""): String =
+    (localProps.getProperty(name) ?: System.getenv(name) ?: defaultValue)
+        .trim()
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+
+val seedGeminiPrimary = readLocalOrEnv("NANA_SEED_GEMINI_PRIMARY")
+val seedGeminiBackup = readLocalOrEnv("NANA_SEED_GEMINI_BACKUP")
+val seedGeminiPrimaryModel = readLocalOrEnv("NANA_SEED_GEMINI_PRIMARY_MODEL", "gemini-3-flash-preview")
+val seedGeminiBackupModel = readLocalOrEnv("NANA_SEED_GEMINI_BACKUP_MODEL", "gemini-3.5-flash-lite")
+
 android {
     namespace = "com.adwewecat.nana"
     compileSdk = 35
@@ -47,6 +58,10 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["appAuthRedirectScheme"] = appAuthRedirectScheme
         buildConfigField("String", "GOOGLE_OAUTH_CLIENT_ID", "\"$escapedGoogleOauthClientId\"")
+        buildConfigField("String", "NANA_SEED_GEMINI_PRIMARY", "\"$seedGeminiPrimary\"")
+        buildConfigField("String", "NANA_SEED_GEMINI_BACKUP", "\"$seedGeminiBackup\"")
+        buildConfigField("String", "NANA_SEED_GEMINI_PRIMARY_MODEL", "\"$seedGeminiPrimaryModel\"")
+        buildConfigField("String", "NANA_SEED_GEMINI_BACKUP_MODEL", "\"$seedGeminiBackupModel\"")
     }
 
     buildTypes {

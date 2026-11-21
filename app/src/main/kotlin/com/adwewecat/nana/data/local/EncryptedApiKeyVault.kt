@@ -87,12 +87,22 @@ class EncryptedApiKeyVault(
         prefs.edit().putBoolean(KEY_AUTH_NEEDS_REAUTH, needsReauth).apply()
     }
 
+    /** Returns the fingerprint of the last local build seed bundle applied to this vault. */
+    fun loadSeedBundleFingerprint(): String? =
+        prefs.getString(KEY_SEED_BUNDLE_FINGERPRINT, null)?.takeIf { it.isNotBlank() }
+
+    /** Records that a local build seed bundle has been applied so user edits/deletions persist. */
+    fun saveSeedBundleFingerprint(fingerprint: String) {
+        prefs.edit().putString(KEY_SEED_BUNDLE_FINGERPRINT, fingerprint).apply()
+    }
+
     companion object {
         private const val PREFS_FILE_NAME = "nana_encrypted_vault"
         private const val KEY_API_KEYS = "api_keys_json"
         private const val KEY_APP_SETTINGS = "app_settings_json"
         private const val KEY_AUTH_STATE_JSON = "drive_auth_state_json"
         private const val KEY_AUTH_NEEDS_REAUTH = "drive_auth_needs_reauth"
+        private const val KEY_SEED_BUNDLE_FINGERPRINT = "local_seed_bundle_fingerprint"
 
         private val json = Json {
             ignoreUnknownKeys = true

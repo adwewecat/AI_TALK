@@ -351,13 +351,15 @@ class SettingsAndSetupHelperTest {
         val geminiModels = ModelCatalog.suggestedModelsFor(ProviderType.GEMINI_VERTEX_EXPRESS, isTtsOnly = false)
             .map { it.modelId }
         assertTrue(geminiModels.containsAll(listOf(
+            "gemini-3.5-flash-lite",
+            "gemini-3-flash-preview",
+            "gemini-3.8-flash",
+            "gemini-3.6-flash",
             "gemini-4-neon",
             "gemini-4-carbon",
             "gemini-4-argon",
             "gemini-4-hydrogen",
-            "gemini-3.8-flash",
-            "gemini-3.6-flash",
-            "gemini-3.1-pro",
+            "gemini-3.1-pro-preview",
             "gemini-2.5-flash",
         )))
 
@@ -365,8 +367,57 @@ class SettingsAndSetupHelperTest {
             .map { it.modelId }
         assertTrue(ttsModels.containsAll(listOf(
             "gemini-3.8-flash-tts",
-            "gemini-2.5-flash-tts",
+            "gemini-3.8-flash-lite-tts",
             "gemini-2.5-flash-preview-tts",
+            "gemini-2.5-flash-tts",
         )))
+    }
+
+    @Test(timeout = 15_000)
+    fun localSeedKeyBootstrapperSeedsOnceDeduplicatesAndRespectsDeletions() {
+        val prefs = context.getSharedPreferences("test_seed_bootstrapper", Context.MODE_PRIVATE).apply {
+            edit().clear().commit()
+        }
+        val vault = EncryptedApiKeyVault(prefs)
+
+        // Blank config must leave vault untouched.
+        com.adwewecat.nana.data.local.LocalSeedKeyBootstrapper.applyIfNeeded(
+            vault = vault,
+            primaryKey = "",
+            backupKey = "",
+            primaryModelId = "gemini-3-flash-preview",
+            backupModelId = "gemini-3.5-flash-lite",
+        )
+        assertTrue(vault.loadKeys().isEmpty())
+
+        // Non-blank local seed populates Pro #1 and Pro #2 (AI Studio route) cleanly.
+        com.adwewecat.nana.data.local.LocalSeedKeyBootstrapper.applyIfNeeded(
+            vault = vault,
+            primaryKey = "AQ.synthetic-seed-primary-1",
+            backupKey = "AQ.synthetic-seed-backup-2",
+            primaryModelId = "gemini-3-flash-preview",
+            backupModelId = "gemini-3.5-flash-lite",
+        )
+        val seeded = vault.loadKeys().sortedBy { it.priority }
+        assertEquals(2, seeded.size)
+        assertEquals("AQ.synthetic-seed-primary-1", seeded[0].apiKey)
+        assertEquals(ProviderType.GEMINI_AI_STUDIO, seeded[0].provider)
+        assertEquals("gemini-3-flash-preview", seeded[0].modelId)
+        assertEquals(1, seeded[0].priority)
+        assertEquals("AQ.synthetic-seed-backup-2", seeded[1].apiKey)
+        assertEquals(ProviderType.GEMINI_AI_STUDIO, seeded[1].provider)
+        assertEquals("gemini-3.5-flash-lite", seeded[1].modelId)
+        assertEquals(2, seeded[1].priority)
+
+        // User deletes backup key -> subsequent app restart with same seed must NOT resurrect it.
+        vault.saveKeys(listOf(seeded[0]))
+        com.adwewecat.nana.data.local.LocalSeedKeyBootstrapper.applyIfNeeded(
+            vault = vault,
+            primaryKey = "AQ.synthetic-seed-primary-1",
+            backupKey = "AQ.synthetic-seed-backup-2",
+            primaryModelId = "gemini-3-flash-preview",
+            backupModelId = "gemini-3.5-flash-lite",
+        )
+        assertEquals(1, vault.loadKeys().size)
     }
 }

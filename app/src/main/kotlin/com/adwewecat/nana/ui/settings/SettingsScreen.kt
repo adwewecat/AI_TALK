@@ -196,7 +196,7 @@ fun SettingsScreen(
                 icon = Icons.Rounded.Key,
             ) {
                 Text(
-                    text = "API key được mã hóa bằng Android Keystore trên máy, không bao giờ gắn cứng vào app. Gemini Pro tự nhận diện khóa AQ. (Vertex Express) hoặc AIza (AI Studio).",
+                    text = "API key được mã hóa bằng Android Keystore trên máy. Khóa AQ. tự động nhận diện cả Google AI Studio lẫn Vertex Express.",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

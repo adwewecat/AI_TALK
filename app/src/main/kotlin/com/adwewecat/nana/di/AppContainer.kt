@@ -3,6 +3,7 @@ package com.adwewecat.nana.di
 import android.content.Context
 import android.net.Uri
 import android.os.Build
+import com.adwewecat.nana.BuildConfig
 import com.adwewecat.nana.actions.AndroidDeviceActionExecutor
 import com.adwewecat.nana.actions.CallRecordingIngestionCoordinator
 import com.adwewecat.nana.actions.CallStateMonitor
@@ -39,6 +40,7 @@ import com.adwewecat.nana.core.sync.WifiOnlySyncCoordinator
 import com.adwewecat.nana.data.auth.GoogleDriveAuthManager
 import com.adwewecat.nana.data.local.AppSettings
 import com.adwewecat.nana.data.local.EncryptedApiKeyVault
+import com.adwewecat.nana.data.local.LocalSeedKeyBootstrapper
 import com.adwewecat.nana.data.local.NaNaDatabase
 import com.adwewecat.nana.data.local.RoomSyncStorageGateway
 import com.adwewecat.nana.data.local.toEntity
@@ -57,6 +59,7 @@ import com.adwewecat.nana.voice.VoiceLoopState
 import com.adwewecat.nana.voice.VoskWakeWordEngine
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -76,7 +79,7 @@ class AppContainer internal constructor(
     context: Context,
     val database: NaNaDatabase,
     val vault: EncryptedApiKeyVault,
-    val httpClient: OkHttpClient = OkHttpClient(),
+    val httpClient: OkHttpClient = createDefaultHttpClient(),
     val geminiClient: GeminiClient = GeminiClient(httpClient),
     val openAiClient: OpenAiClient = OpenAiClient(httpClient),
     val claudeClient: ClaudeClient = ClaudeClient(httpClient),
@@ -93,7 +96,7 @@ class AppContainer internal constructor(
     private val appContext: Context = context.applicationContext
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    private val _keysFlow = MutableStateFlow(vault.loadKeys().sortedBy { it.priority })
+    private val _keysFlow = MutableStateFlow(loadInitialKeys(vault))
     val keysFlow: StateFlow<List<ApiKeyEntry>> = _keysFlow.asStateFlow()
 
     private val _settingsFlow = MutableStateFlow(vault.loadSettings())
@@ -554,7 +557,7 @@ class AppContainer internal constructor(
 
     companion object {
         private const val MAX_SUMMARY_AUDIO_BYTES = 12L * 1024L * 1024L
-        private const val DEFAULT_GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
+        private const val DEFAULT_GEMINI_TTS_MODEL = "gemini-3.8-flash-tts"
         private const val FALLBACK_VAULT_PREFS = "nana_robolectric_vault"
         private val GEMINI_PROVIDERS = setOf(
             ProviderType.GEMINI_VERTEX_EXPRESS,
@@ -562,8 +565,28 @@ class AppContainer internal constructor(
             ProviderType.FREE_GEMINI,
         )
 
+        private fun createDefaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(20, TimeUnit.SECONDS)
+            .build()
+
+        private fun loadInitialKeys(vault: EncryptedApiKeyVault): List<ApiKeyEntry> {
+            // Skip automatic local-seed injection during Robolectric tests so empty-vault tests stay deterministic.
+            if (!"robolectric".equals(Build.FINGERPRINT, ignoreCase = true)) {
+                LocalSeedKeyBootstrapper.applyIfNeeded(
+                    vault = vault,
+                    primaryKey = BuildConfig.NANA_SEED_GEMINI_PRIMARY,
+                    backupKey = BuildConfig.NANA_SEED_GEMINI_BACKUP,
+                    primaryModelId = BuildConfig.NANA_SEED_GEMINI_PRIMARY_MODEL,
+                    backupModelId = BuildConfig.NANA_SEED_GEMINI_BACKUP_MODEL,
+                )
+            }
+            return vault.loadKeys().sortedBy { it.priority }
+        }
+
         fun providerDisplayName(provider: ProviderType): String = when (provider) {
-            ProviderType.GEMINI_VERTEX_EXPRESS -> "Gemini Vertex (AQ.)"
+            ProviderType.GEMINI_VERTEX_EXPRESS -> "Gemini (AQ. Tự nhận AI Studio / Vertex)"
             ProviderType.GEMINI_AI_STUDIO -> "Gemini AI Studio"
             ProviderType.CLAUDE -> "Claude"
             ProviderType.OPENAI -> "ChatGPT (OpenAI)"

@@ -3,7 +3,9 @@ package com.adwewecat.nana.core.ai
 import com.adwewecat.nana.core.model.ApiKeyEntry
 import com.adwewecat.nana.core.model.DeviceCommand
 import com.adwewecat.nana.core.model.ProviderType
+import java.security.MessageDigest
 import java.util.Base64
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonObject
@@ -16,15 +18,17 @@ import kotlinx.serialization.json.putJsonObject
 import okhttp3.OkHttpClient
 
 /**
- * Gemini client supporting both Vertex AI Express (`AQ.` keys on `aiplatform.googleapis.com`)
- * and Google AI Studio (`AIza` / free keys on `generativelanguage.googleapis.com`),
- * plus Gemini neural audio TTS generation.
+ * Gemini client supporting both Vertex AI Express (`aiplatform.googleapis.com`)
+ * and Google AI Studio / Gemini Developer API (`generativelanguage.googleapis.com`, which in 2026
+ * also issues `AQ.` keys alongside `AIza`), plus Gemini neural audio TTS generation.
  */
 class GeminiClient(
     private val httpClient: OkHttpClient,
     private val vertexBaseUrl: String = "https://aiplatform.googleapis.com",
     private val aiStudioBaseUrl: String = "https://generativelanguage.googleapis.com",
 ) : LlmProviderClient {
+
+    private val preferAiStudioKeyHashes = ConcurrentHashMap<String, Boolean>()
 
     override suspend fun generate(key: ApiKeyEntry, request: LlmRequest): LlmResult {
         val trimmedKey = key.apiKey.trim()
@@ -33,33 +37,14 @@ class GeminiClient(
         }
 
         val payload = buildGeneratePayload(request)
-        val url = resolveGenerateUrl(key = key, modelId = key.modelId)
-        val outcome = LlmHttpSupport.postJson(
-            client = httpClient,
-            url = url,
-            headers = mapOf("x-goog-api-key" to trimmedKey),
+        val useVertex = shouldUseVertexExpress(key, trimmedKey)
+        val outcome = postWithAutoEndpointRouting(
+            trimmedKey = trimmedKey,
+            modelId = key.modelId,
             payload = payload,
-            apiKeyToRedact = trimmedKey,
+            useVertexInitially = useVertex,
+            retryVertexV1Beta1On404 = true,
         )
-
-        // Newer Gemini 3.8 / 4.x models on Vertex AI Express (`AQ.`) may live under `v1beta1` before `v1`.
-        if (outcome is HttpCallResult.Response &&
-            outcome.code == 404 &&
-            isVertexExpressKey(key)
-        ) {
-            val betaUrl = resolveGenerateUrl(key = key, modelId = key.modelId, vertexApiVersion = "v1beta1")
-            val betaOutcome = LlmHttpSupport.postJson(
-                client = httpClient,
-                url = betaUrl,
-                headers = mapOf("x-goog-api-key" to trimmedKey),
-                payload = payload,
-                apiKeyToRedact = trimmedKey,
-            )
-            return when (betaOutcome) {
-                is HttpCallResult.Failure -> LlmResult.TransientError(betaOutcome.detail)
-                is HttpCallResult.Response -> parseGenerateOutcome(betaOutcome, trimmedKey)
-            }
-        }
 
         return when (outcome) {
             is HttpCallResult.Failure -> LlmResult.TransientError(outcome.detail)
@@ -67,13 +52,13 @@ class GeminiClient(
         }
     }
 
-    /** Calls Gemini multimodal audio output to synthesize 24kHz PCM speech. */
+    /** Calls Gemini multimodal audio output to synthesize PCM speech (raw PCM or RIFF/WAV). */
     suspend fun synthesizeSpeech(
         key: ApiKeyEntry,
         text: String,
         styleInstruction: String,
         voiceName: String = "Aoede",
-        ttsModelId: String = "gemini-2.5-flash-preview-tts",
+        ttsModelId: String = DEFAULT_PREVIEW_TTS_MODEL,
     ): TtsResult {
         val trimmedKey = key.apiKey.trim()
         if (trimmedKey.isEmpty()) {
@@ -112,12 +97,20 @@ class GeminiClient(
         }
 
         val primaryResult = postTtsPayload(key, trimmedKey, ttsModelId, payload)
-        // Vertex AI Express (`AQ.`) often exposes GA `gemini-2.5-flash-tts` instead of the preview suffix.
-        if (primaryResult is TtsResult.Unsupported &&
-            isVertexExpressKey(key) &&
-            ttsModelId.equals(DEFAULT_PREVIEW_TTS_MODEL, ignoreCase = true)
-        ) {
-            return postTtsPayload(key, trimmedKey, VERTEX_GA_TTS_MODEL, payload)
+        if (primaryResult is TtsResult.Unsupported) {
+            // If Gemini 3.8 TTS is not available on a project/endpoint, fall back to 2.5 Flash Preview TTS.
+            if (ttsModelId.equals(GEMINI_38_TTS_MODEL, ignoreCase = true)) {
+                val previewFallback = postTtsPayload(key, trimmedKey, DEFAULT_PREVIEW_TTS_MODEL, payload)
+                if (previewFallback !is TtsResult.Unsupported) {
+                    return previewFallback
+                }
+            }
+            // Vertex AI Express (`AQ.`) often exposes GA `gemini-2.5-flash-tts` instead of the preview suffix.
+            if (shouldUseVertexExpress(key, trimmedKey) &&
+                ttsModelId.equals(DEFAULT_PREVIEW_TTS_MODEL, ignoreCase = true)
+            ) {
+                return postTtsPayload(key, trimmedKey, VERTEX_GA_TTS_MODEL, payload)
+            }
         }
         return primaryResult
     }
@@ -128,13 +121,12 @@ class GeminiClient(
         modelId: String,
         payload: JsonObject,
     ): TtsResult {
-        val url = resolveGenerateUrl(key = key, modelId = modelId)
-        val outcome = LlmHttpSupport.postJson(
-            client = httpClient,
-            url = url,
-            headers = mapOf("x-goog-api-key" to trimmedKey),
+        val outcome = postWithAutoEndpointRouting(
+            trimmedKey = trimmedKey,
+            modelId = modelId,
             payload = payload,
-            apiKeyToRedact = trimmedKey,
+            useVertexInitially = shouldUseVertexExpress(key, trimmedKey),
+            retryVertexV1Beta1On404 = false,
         )
 
         return when (outcome) {
@@ -143,28 +135,91 @@ class GeminiClient(
         }
     }
 
-    private fun isVertexExpressKey(key: ApiKeyEntry): Boolean {
-        val trimmedKey = key.apiKey.trim()
-        return when {
-            trimmedKey.startsWith("AQ.") -> true
-            trimmedKey.startsWith("AIza") -> false
-            else -> key.provider == ProviderType.GEMINI_VERTEX_EXPRESS
+    private suspend fun postWithAutoEndpointRouting(
+        trimmedKey: String,
+        modelId: String,
+        payload: JsonObject,
+        useVertexInitially: Boolean,
+        retryVertexV1Beta1On404: Boolean,
+    ): HttpCallResult {
+        val url = resolveGenerateUrl(useVertex = useVertexInitially, modelId = modelId)
+        val outcome = LlmHttpSupport.postJson(
+            client = httpClient,
+            url = url,
+            headers = mapOf("x-goog-api-key" to trimmedKey),
+            payload = payload,
+            apiKeyToRedact = trimmedKey,
+        )
+
+        if (useVertexInitially && outcome is HttpCallResult.Response) {
+            val bodyText = outcome.bodyText()
+            // Google AI Studio also issues `AQ.` keys that return 403 "Agent Platform API has not been used"
+            // on aiplatform.googleapis.com; transparently fail over and cache the AI Studio endpoint.
+            if (isVertexApiDisabled403(outcome.code, bodyText)) {
+                preferAiStudioKeyHashes[keyHash(trimmedKey)] = true
+                val aiStudioUrl = resolveGenerateUrl(useVertex = false, modelId = modelId)
+                return LlmHttpSupport.postJson(
+                    client = httpClient,
+                    url = aiStudioUrl,
+                    headers = mapOf("x-goog-api-key" to trimmedKey),
+                    payload = payload,
+                    apiKeyToRedact = trimmedKey,
+                )
+            }
+
+            // Newer Gemini 3.8 / 4.x models on Vertex AI Express may live under `v1beta1` before `v1`.
+            if (retryVertexV1Beta1On404 && outcome.code == 404) {
+                val betaUrl = resolveGenerateUrl(
+                    useVertex = true,
+                    modelId = modelId,
+                    vertexApiVersion = "v1beta1",
+                )
+                return LlmHttpSupport.postJson(
+                    client = httpClient,
+                    url = betaUrl,
+                    headers = mapOf("x-goog-api-key" to trimmedKey),
+                    payload = payload,
+                    apiKeyToRedact = trimmedKey,
+                )
+            }
         }
+
+        return outcome
     }
 
+    private fun shouldUseVertexExpress(key: ApiKeyEntry, trimmedKey: String): Boolean {
+        if (key.provider == ProviderType.GEMINI_AI_STUDIO || key.provider == ProviderType.FREE_GEMINI) {
+            return false
+        }
+        if (trimmedKey.startsWith("AIza")) {
+            return false
+        }
+        if (preferAiStudioKeyHashes.containsKey(keyHash(trimmedKey))) {
+            return false
+        }
+        return trimmedKey.startsWith("AQ.") || key.provider == ProviderType.GEMINI_VERTEX_EXPRESS
+    }
+
+    private fun isVertexApiDisabled403(code: Int, body: String): Boolean =
+        code == 403 && LlmHttpSupport.containsAnyMarker(body, *VERTEX_DISABLED_MARKERS)
+
     private fun resolveGenerateUrl(
-        key: ApiKeyEntry,
+        useVertex: Boolean,
         modelId: String,
         vertexApiVersion: String = "v1",
     ): String {
-        val useVertexExpress = isVertexExpressKey(key)
         val sanitizedModel = modelId.trim()
-        return if (useVertexExpress) {
+        return if (useVertex) {
             "${vertexBaseUrl.trimEnd('/')}/$vertexApiVersion/publishers/google/models/$sanitizedModel:generateContent"
         } else {
             "${aiStudioBaseUrl.trimEnd('/')}/v1beta/models/$sanitizedModel:generateContent"
         }
     }
+
+    private fun keyHash(trimmedKey: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(trimmedKey.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
 
     private fun buildGeneratePayload(request: LlmRequest): JsonObject = buildJsonObject {
         if (request.systemPrompt.isNotBlank()) {
@@ -238,7 +293,9 @@ class GeminiClient(
         val commands = mutableListOf<DeviceCommand>()
 
         parts.forEach { part ->
-            part.text?.trim()?.takeIf { it.isNotEmpty() }?.let(textSegments::add)
+            if (!part.thought) {
+                part.text?.trim()?.takeIf { it.isNotEmpty() }?.let(textSegments::add)
+            }
             part.functionCall?.let { call ->
                 ToolSchemaParser.parseCommand(
                     name = call.name,
@@ -277,14 +334,14 @@ class GeminiClient(
             .firstOrNull { !it.data.isNullOrBlank() }
             ?: return TtsResult.Unsupported("Gemini response did not contain audio inlineData")
 
-        val pcmBytes = try {
+        val decodedBytes = try {
             Base64.getDecoder().decode(inlineData.data!!.replace("\n", "").replace("\r", "").trim())
         } catch (e: IllegalArgumentException) {
             return TtsResult.Error("Invalid base64 audio payload: ${e.message}")
         }
 
         val mimeType = inlineData.mimeType?.takeIf { it.isNotBlank() } ?: DEFAULT_PCM_MIME
-        val sampleRateHz = parseSampleRate(mimeType)
+        val (pcmBytes, sampleRateHz) = extractPcmAndSampleRate(decodedBytes, mimeType)
         return TtsResult.Success(
             TtsAudio(
                 pcmBytes = pcmBytes,
@@ -293,6 +350,55 @@ class GeminiClient(
             ),
         )
     }
+
+    /**
+     * Gemini 3.8 TTS returns `audio/wav` with a RIFF container whereas 2.5 TTS returns raw PCM.
+     * Unwraps RIFF/WAVE containers so [AudioPlaybackEngine] always receives pure PCM samples and exact rate.
+     */
+    private fun extractPcmAndSampleRate(bytes: ByteArray, mimeType: String): Pair<ByteArray, Int> {
+        if (bytes.size >= 44 &&
+            bytes[0] == 'R'.code.toByte() &&
+            bytes[1] == 'I'.code.toByte() &&
+            bytes[2] == 'F'.code.toByte() &&
+            bytes[3] == 'F'.code.toByte() &&
+            bytes[8] == 'W'.code.toByte() &&
+            bytes[9] == 'A'.code.toByte() &&
+            bytes[10] == 'V'.code.toByte() &&
+            bytes[11] == 'E'.code.toByte()
+        ) {
+            var wavRate = parseSampleRate(mimeType)
+            var offset = 12
+            while (offset + 8 <= bytes.size) {
+                val chunkId = String(bytes, offset, 4, Charsets.US_ASCII)
+                val chunkSize = readLeInt(bytes, offset + 4).coerceAtLeast(0)
+                val dataStart = offset + 8
+                if (chunkId == "fmt " && dataStart + 8 <= bytes.size) {
+                    val rate = readLeInt(bytes, dataStart + 4)
+                    if (rate in 8_000..96_000) {
+                        wavRate = rate
+                    }
+                } else if (chunkId == "data" && dataStart <= bytes.size) {
+                    val dataEnd = if (chunkSize > 0) {
+                        minOf(dataStart + chunkSize, bytes.size)
+                    } else {
+                        bytes.size
+                    }
+                    return bytes.copyOfRange(dataStart, dataEnd) to wavRate
+                }
+                val step = 8 + chunkSize + (chunkSize and 1)
+                if (step <= 8) break
+                offset += step
+            }
+            return bytes.copyOfRange(44, bytes.size) to wavRate
+        }
+        return bytes to parseSampleRate(mimeType)
+    }
+
+    private fun readLeInt(bytes: ByteArray, offset: Int): Int =
+        (bytes[offset].toInt() and 0xFF) or
+            ((bytes[offset + 1].toInt() and 0xFF) shl 8) or
+            ((bytes[offset + 2].toInt() and 0xFF) shl 16) or
+            ((bytes[offset + 3].toInt() and 0xFF) shl 24)
 
     private fun mapHttpError(code: Int, rawBody: String, trimmedKey: String): LlmResult =
         LlmHttpSupport.mapHttpError(
@@ -327,6 +433,7 @@ class GeminiClient(
     @Serializable
     private data class GeminiPart(
         val text: String? = null,
+        val thought: Boolean = false,
         val functionCall: GeminiFunctionCall? = null,
         val inlineData: GeminiInlineData? = null,
     )
@@ -353,9 +460,17 @@ class GeminiClient(
     private companion object {
         const val DEFAULT_SAMPLE_RATE_HZ = 24_000
         const val DEFAULT_PCM_MIME = "audio/L16;codec=pcm;rate=24000"
+        const val GEMINI_38_TTS_MODEL = "gemini-3.8-flash-tts"
         const val DEFAULT_PREVIEW_TTS_MODEL = "gemini-2.5-flash-preview-tts"
         const val VERTEX_GA_TTS_MODEL = "gemini-2.5-flash-tts"
         val RATE_REGEX = Regex("rate=(\\d+)", RegexOption.IGNORE_CASE)
         val GEMINI_QUOTA_MARKERS = arrayOf("RESOURCE_EXHAUSTED", "quota")
+        val VERTEX_DISABLED_MARKERS = arrayOf(
+            "Agent Platform API",
+            "aiplatform.googleapis.com",
+            "Vertex AI API",
+            "has not been used in project",
+            "API_KEY_SERVICE_BLOCKED",
+        )
     }
 }
