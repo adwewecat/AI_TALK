@@ -90,6 +90,9 @@ interface CallRecordingDao {
     @Query("SELECT EXISTS(SELECT 1 FROM call_recordings WHERE sourceUri = :sourceUri)")
     suspend fun existsBySourceUri(sourceUri: String): Boolean
 
+    @Query("SELECT EXISTS(SELECT 1 FROM call_recordings WHERE sourceUri = :sourceUri AND fileSizeBytes = :fileSizeBytes)")
+    suspend fun existsBySourceAndSize(sourceUri: String, fileSizeBytes: Long): Boolean
+
     @Query(
         "UPDATE call_recordings SET resumeSessionUri = :sessionUri, uploadedBytes = :uploadedBytes, syncStatus = :status WHERE id = :id",
     )

@@ -8,4 +8,7 @@
     <string name="notification_channel_voice_desc">Thông báo trạng thái lắng nghe giọng nói của Na Na</string>
     <string name="voice_action_talk">Nói chuyện</string>
     <string name="voice_action_stop">Dừng Na Na</string>
+    <string name="notification_listener_label">Na Na — Nghe/từ chối cuộc gọi</string>
+    <string name="accessibility_service_label">Na Na — Tự phát YouTube &amp; hỗ trợ cuộc gọi</string>
+    <string name="accessibility_service_description">Cho phép Na Na tự bấm phát video YouTube đầu tiên khi bạn yêu cầu mở nhạc và hỗ trợ bấm nút Nghe/Từ chối cuộc gọi Zalo, Messenger, Telegram khi cần.</string>
 </resources>
