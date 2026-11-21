@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Na Na</string>
+    <string name="tile_nana_label">Na Na</string>
+    <string name="tile_nana_active">Đang lắng nghe</string>
+    <string name="tile_nana_inactive">Nhấn để bật</string>
+    <string name="notification_channel_voice_name">Trợ lý giọng nói Na Na</string>
+    <string name="notification_channel_voice_desc">Thông báo trạng thái lắng nghe giọng nói của Na Na</string>
+    <string name="voice_action_talk">Nói chuyện</string>
+    <string name="voice_action_stop">Dừng Na Na</string>
 </resources>

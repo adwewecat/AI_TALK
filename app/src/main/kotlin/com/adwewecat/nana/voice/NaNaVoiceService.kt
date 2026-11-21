@@ -1,0 +1,508 @@
+package com.adwewecat.nana.voice
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.media.AudioRecord
+import android.os.Build
+import android.os.IBinder
+import android.os.PowerManager
+import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+import com.adwewecat.nana.R
+import com.adwewecat.nana.core.ai.AiChatRouter
+import com.adwewecat.nana.core.ai.ClaudeClient
+import com.adwewecat.nana.core.ai.GeminiClient
+import com.adwewecat.nana.core.ai.OpenAiClient
+import com.adwewecat.nana.core.ai.TtsRouter
+import com.adwewecat.nana.core.model.ActionExecutionResult
+import com.adwewecat.nana.core.model.DeviceActionExecutor
+import com.adwewecat.nana.core.model.DeviceCommand
+import com.adwewecat.nana.core.quota.KeyPoolManager
+import com.adwewecat.nana.core.quota.NaNaQuotaStateMachine
+import com.adwewecat.nana.core.voice.EnergyVad
+import com.adwewecat.nana.core.voice.PcmWavEncoder
+import com.adwewecat.nana.core.voice.VadEvent
+import com.adwewecat.nana.data.local.AppSettings
+import com.adwewecat.nana.data.local.EncryptedApiKeyVault
+import com.adwewecat.nana.data.local.NaNaDatabase
+import com.adwewecat.nana.data.sync.DriveSyncScheduler
+import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+
+/** Runtime bundle supplied by [NaNaVoiceRuntimeProvider] (e.g. `NaNaApplication` in Task 10). */
+data class NaNaVoiceRuntime(
+    val orchestrator: NaNaVoiceOrchestrator,
+    val settingsProvider: () -> AppSettings,
+    val wakeWordEngine: WakeWordEngine? = null,
+)
+
+/** Implemented by `Application` (or tests) to inject shared voice runtime dependencies. */
+fun interface NaNaVoiceRuntimeProvider {
+    fun provideVoiceRuntime(): NaNaVoiceRuntime
+}
+
+/**
+ * Android 15/16 compliant microphone Foreground Service hosting Na Na's continuous voice loop.
+ * Requests `TYPE_BUILTIN_MIC` for capture to keep Bluetooth headsets in stereo A2DP, gates
+ * optional `PARTIAL_WAKE_LOCK` behind `AppSettings.screenOffWakeLock`, and never starts from `BOOT_COMPLETED`.
+ */
+class NaNaVoiceService : Service() {
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    private var runtime: NaNaVoiceRuntime? = null
+    private var ownedFallbackTts: AndroidSystemTtsEngine? = null
+    private var wakeWordEngine: WakeWordEngine? = null
+    private var activeLoopJob: Job? = null
+    private var uiObserverJob: Job? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+        val resolved = resolveRuntime()
+        runtime = resolved
+        wakeWordEngine = resolved.wakeWordEngine ?: VoskWakeWordEngine(this)
+        observeUiForNotifications(resolved.orchestrator)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val action = intent?.action ?: ACTION_START
+        if (action == ACTION_STOP) {
+            stopVoiceService()
+            return START_NOT_STICKY
+        }
+
+        val currentRuntime = runtime ?: resolveRuntime().also {
+            runtime = it
+            wakeWordEngine = it.wakeWordEngine ?: VoskWakeWordEngine(this)
+            observeUiForNotifications(it.orchestrator)
+        }
+
+        if (!startForegroundWithMicType(currentRuntime.orchestrator.uiState.value.statusMessage)) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        _isRunning.value = true
+        syncWakeLockWithSettings(currentRuntime.settingsProvider())
+
+        when (action) {
+            ACTION_PUSH_TO_TALK -> triggerPushToTalk(currentRuntime)
+            else -> {
+                if (activeLoopJob?.isActive != true) {
+                    currentRuntime.orchestrator.markServiceReady()
+                    ensurePassiveWakeWord(currentRuntime)
+                }
+            }
+        }
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        _isRunning.value = false
+        activeLoopJob?.cancel()
+        uiObserverJob?.cancel()
+        wakeWordEngine?.stop()
+        releaseWakeLock()
+        runtime?.orchestrator?.markServiceStopped()
+        ownedFallbackTts?.shutdown()
+        serviceScope.cancel()
+        super.onDestroy()
+    }
+
+    private fun stopVoiceService() {
+        _isRunning.value = false
+        activeLoopJob?.cancel()
+        wakeWordEngine?.stop()
+        releaseWakeLock()
+        runtime?.orchestrator?.markServiceStopped()
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    private fun startForegroundWithMicType(statusText: String): Boolean {
+        if (!BuiltInMicAudioInput.hasRecordAudioPermission(this)) {
+            return false
+        }
+        val notification = buildNotification(statusText)
+        return try {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                notification,
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                } else {
+                    0
+                },
+            )
+            true
+        } catch (_: SecurityException) {
+            false
+        } catch (_: IllegalStateException) {
+            false
+        }
+    }
+
+    private fun observeUiForNotifications(orchestrator: NaNaVoiceOrchestrator) {
+        uiObserverJob?.cancel()
+        uiObserverJob = serviceScope.launch {
+            orchestrator.uiState.collectLatest { snapshot ->
+                if (_isRunning.value) {
+                    val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                    nm?.notify(NOTIFICATION_ID, buildNotification(snapshot.statusMessage))
+                }
+            }
+        }
+    }
+
+    private fun ensurePassiveWakeWord(currentRuntime: NaNaVoiceRuntime) {
+        if (!_isRunning.value) return
+        val settings = currentRuntime.settingsProvider()
+        syncWakeLockWithSettings(settings)
+        if (!settings.wakeWordEnabled) {
+            wakeWordEngine?.stop()
+            return
+        }
+        if (currentRuntime.orchestrator.uiState.value.loopState != VoiceLoopState.IDLE_WAKE) {
+            return
+        }
+        wakeWordEngine?.start(
+            onWakeDetected = {
+                serviceScope.launch {
+                    if (_isRunning.value) {
+                        triggerWakeAndConversation(currentRuntime)
+                    }
+                }
+            },
+            onMicLevel = { level ->
+                currentRuntime.orchestrator.updateMicLevel(level)
+            },
+        )
+    }
+
+    private fun triggerPushToTalk(currentRuntime: NaNaVoiceRuntime) {
+        wakeWordEngine?.stop()
+        val previousJob = activeLoopJob
+        activeLoopJob = serviceScope.launch {
+            previousJob?.cancelAndJoin()
+            val state = currentRuntime.orchestrator.uiState.value.loopState
+            if (state == VoiceLoopState.IDLE_WAKE || state == VoiceLoopState.STOPPED) {
+                currentRuntime.orchestrator.onWakeWordDetected()
+            }
+            runActiveTurnLoop(currentRuntime)
+        }
+    }
+
+    private fun triggerWakeAndConversation(currentRuntime: NaNaVoiceRuntime) {
+        if (activeLoopJob?.isActive == true) {
+            return
+        }
+        wakeWordEngine?.stop()
+        activeLoopJob = serviceScope.launch {
+            currentRuntime.orchestrator.onWakeWordDetected()
+            runActiveTurnLoop(currentRuntime)
+        }
+    }
+
+    private suspend fun runActiveTurnLoop(currentRuntime: NaNaVoiceRuntime) {
+        val orchestrator = currentRuntime.orchestrator
+        while (serviceScope.isActive && _isRunning.value) {
+            val snapshot = orchestrator.uiState.value
+            val loopState = snapshot.loopState
+            if (loopState != VoiceLoopState.LISTENING && loopState != VoiceLoopState.AWAITING_CONSENT) {
+                break
+            }
+
+            val settings = currentRuntime.settingsProvider()
+            val timeoutMs = settings.silenceTimeoutSec.coerceIn(5, 60) * 1_000L
+            val capturedPcm = captureSingleUtterancePcm(
+                maxWaitForSpeechMs = timeoutMs,
+                onMicLevel = { orchestrator.updateMicLevel(it) },
+            )
+
+            if (!serviceScope.isActive || !_isRunning.value) {
+                break
+            }
+
+            if (capturedPcm == null || capturedPcm.isEmpty()) {
+                if (loopState == VoiceLoopState.AWAITING_CONSENT) {
+                    orchestrator.onConsentTimeout()
+                } else {
+                    orchestrator.stopSession()
+                }
+                break
+            }
+
+            val wavBytes = PcmWavEncoder.encodeMono16Bit(capturedPcm, BuiltInMicAudioInput.SAMPLE_RATE_HZ)
+            val offlineTranscript = if (loopState == VoiceLoopState.AWAITING_CONSENT) {
+                withContext(Dispatchers.Default) {
+                    VoskWakeWordEngine.recognizeConsentFromPcm(this@NaNaVoiceService, capturedPcm)
+                }
+            } else {
+                null
+            }
+            orchestrator.onUserUtterance(transcript = offlineTranscript, wavBytes = wavBytes)
+        }
+
+        if (_isRunning.value && orchestrator.uiState.value.loopState == VoiceLoopState.IDLE_WAKE) {
+            ensurePassiveWakeWord(currentRuntime)
+        }
+    }
+
+    private suspend fun captureSingleUtterancePcm(
+        maxWaitForSpeechMs: Long,
+        onMicLevel: (Float) -> Unit,
+    ): ByteArray? = withContext(Dispatchers.IO) {
+        val audioRecord = BuiltInMicAudioInput.openBuiltInMicAudioRecord(this@NaNaVoiceService)
+            ?: return@withContext null
+
+        try {
+            audioRecord.startRecording()
+            if (audioRecord.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                return@withContext null
+            }
+
+            val vad = EnergyVad(
+                speechRmsThreshold = 650.0,
+                silenceDurationMs = 1_400L,
+                maxUtteranceMs = 15_000L,
+            )
+            val pcmBuffer = ByteArrayOutputStream()
+            val frame = ShortArray(CAPTURE_FRAME_SAMPLES)
+            var speechStarted = false
+            var idleElapsedMs = 0L
+            var preRollBytes: ByteArray? = null
+
+            while (isActive) {
+                val readCount = audioRecord.read(frame, 0, frame.size)
+                if (readCount <= 0) {
+                    continue
+                }
+
+                val rms = vad.computeRms(frame, readCount)
+                onMicLevel(BuiltInMicAudioInput.computeNormalizedMicLevel(rms))
+
+                val frameDurationMs = (readCount * 1_000L) / BuiltInMicAudioInput.SAMPLE_RATE_HZ
+                val chunkBytes = BuiltInMicAudioInput.shortsToLittleEndianPcmBytes(frame, readCount)
+
+                when (vad.feedFrame(if (readCount == frame.size) frame else frame.copyOf(readCount), frameDurationMs)) {
+                    VadEvent.IDLE -> {
+                        if (!speechStarted) {
+                            preRollBytes = chunkBytes
+                            idleElapsedMs += frameDurationMs
+                            if (idleElapsedMs >= maxWaitForSpeechMs) {
+                                return@withContext null
+                            }
+                        }
+                    }
+
+                    VadEvent.SPEECH_STARTED -> {
+                        speechStarted = true
+                        preRollBytes?.let { pcmBuffer.write(it) }
+                        preRollBytes = null
+                        pcmBuffer.write(chunkBytes)
+                    }
+
+                    VadEvent.SPEECH_ACTIVE -> {
+                        pcmBuffer.write(chunkBytes)
+                    }
+
+                    VadEvent.UTTERANCE_COMPLETE -> {
+                        pcmBuffer.write(chunkBytes)
+                        return@withContext pcmBuffer.toByteArray()
+                    }
+                }
+            }
+            if (speechStarted) pcmBuffer.toByteArray() else null
+        } finally {
+            onMicLevel(0f)
+            runCatching {
+                if (audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    audioRecord.stop()
+                }
+                audioRecord.release()
+            }
+        }
+    }
+
+    private fun syncWakeLockWithSettings(settings: AppSettings) {
+        if (settings.screenOffWakeLock) {
+            if (wakeLock?.isHeld != true) {
+                val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+                val lock = wakeLock ?: pm.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    WAKE_LOCK_TAG,
+                ).apply {
+                    setReferenceCounted(false)
+                }.also { wakeLock = it }
+                lock.acquire(WAKE_LOCK_TIMEOUT_MS)
+            }
+        } else {
+            releaseWakeLock()
+        }
+    }
+
+    private fun releaseWakeLock() {
+        runCatching {
+            wakeLock?.let { lock ->
+                if (lock.isHeld) {
+                    lock.release()
+                }
+            }
+        }
+        wakeLock = null
+    }
+
+    private fun createNotificationChannel() {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            getString(R.string.notification_channel_voice_name),
+            NotificationManager.IMPORTANCE_LOW,
+        ).apply {
+            description = getString(R.string.notification_channel_voice_desc)
+            setShowBadge(false)
+        }
+        manager.createNotificationChannel(channel)
+    }
+
+    private fun buildNotification(statusText: String): Notification {
+        val talkPendingIntent = PendingIntent.getService(
+            this,
+            REQUEST_PUSH_TO_TALK,
+            Intent(this, NaNaVoiceService::class.java).setAction(ACTION_PUSH_TO_TALK),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val stopPendingIntent = PendingIntent.getService(
+            this,
+            REQUEST_STOP,
+            Intent(this, NaNaVoiceService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+        val contentPendingIntent = launchIntent?.let {
+            PendingIntent.getActivity(
+                this,
+                REQUEST_OPEN_APP,
+                it,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setContentTitle(getString(R.string.app_name))
+            .setContentText(statusText)
+            .setOngoing(true)
+            .setSilent(true)
+            .apply {
+                if (contentPendingIntent != null) {
+                    setContentIntent(contentPendingIntent)
+                }
+            }
+            .addAction(
+                android.R.drawable.ic_btn_speak_now,
+                getString(R.string.voice_action_talk),
+                talkPendingIntent,
+            )
+            .addAction(
+                android.R.drawable.ic_media_pause,
+                getString(R.string.voice_action_stop),
+                stopPendingIntent,
+            )
+            .build()
+    }
+
+    private fun resolveRuntime(): NaNaVoiceRuntime {
+        val provider = applicationContext as? NaNaVoiceRuntimeProvider
+        if (provider != null) {
+            return provider.provideVoiceRuntime()
+        }
+        return createDefaultRuntime()
+    }
+
+    private fun createDefaultRuntime(): NaNaVoiceRuntime {
+        val appContext = applicationContext
+        val vault = runCatching { EncryptedApiKeyVault.create(appContext) }.getOrNull()
+        val settingsProvider: () -> AppSettings = { vault?.loadSettings() ?: AppSettings() }
+        val keyPool = KeyPoolManager(vault?.loadKeys().orEmpty())
+        val stateMachine = NaNaQuotaStateMachine(keyPool)
+        val httpClient = OkHttpClient()
+        val geminiClient = GeminiClient(httpClient)
+        val openAiClient = OpenAiClient(httpClient)
+        val claudeClient = ClaudeClient(httpClient)
+        val localTts = AndroidSystemTtsEngine(appContext).also { ownedFallbackTts = it }
+        val db = NaNaDatabase.getInstance(appContext)
+        val scheduler = DriveSyncScheduler(appContext)
+        val fallbackExecutor = object : DeviceActionExecutor {
+            override suspend fun execute(command: DeviceCommand): ActionExecutionResult =
+                ActionExecutionResult(
+                    succeeded = false,
+                    spokenFeedback = "Trình điều khiển thiết bị chưa được kết nối.",
+                )
+        }
+
+        val orchestrator = NaNaVoiceOrchestrator(
+            stateMachine = stateMachine,
+            aiChatRouter = AiChatRouter(keyPool, stateMachine, geminiClient, openAiClient, claudeClient),
+            ttsRouter = TtsRouter(keyPool, geminiClient, openAiClient, localTts),
+            localFallbackTts = localTts,
+            actionExecutor = fallbackExecutor,
+            audioPlayer = AndroidAudioPlayer(appContext),
+            messageDao = db.messageDao(),
+            memoryFactDao = db.memoryFactDao(),
+            syncTrigger = SyncTrigger { scheduler.enqueueSync() },
+            settingsProvider = settingsProvider,
+            offlineConsentTranscriber = { pcm ->
+                VoskWakeWordEngine.recognizeConsentFromPcm(appContext, pcm)
+            },
+        )
+        return NaNaVoiceRuntime(
+            orchestrator = orchestrator,
+            settingsProvider = settingsProvider,
+            wakeWordEngine = VoskWakeWordEngine(appContext),
+        )
+    }
+
+    companion object {
+        const val ACTION_START = "com.adwewecat.nana.voice.action.START"
+        const val ACTION_STOP = "com.adwewecat.nana.voice.action.STOP"
+        const val ACTION_PUSH_TO_TALK = "com.adwewecat.nana.voice.action.PUSH_TO_TALK"
+
+        private const val CHANNEL_ID = "nana_voice_channel"
+        private const val NOTIFICATION_ID = 1001
+        private const val REQUEST_OPEN_APP = 10
+        private const val REQUEST_PUSH_TO_TALK = 11
+        private const val REQUEST_STOP = 12
+        private const val CAPTURE_FRAME_SAMPLES = 1_600
+        private const val WAKE_LOCK_TAG = "NaNa:VoiceWakeLock"
+        private const val WAKE_LOCK_TIMEOUT_MS = 30 * 60 * 1_000L
+
+        private val _isRunning = MutableStateFlow(false)
+        val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
+    }
+}
