@@ -21,6 +21,7 @@ import com.adwewecat.nana.data.local.NaNaDatabase
 import com.adwewecat.nana.data.local.toEntity
 import com.adwewecat.nana.di.AppContainer
 import com.adwewecat.nana.ui.settings.ApiKeyMasker
+import com.adwewecat.nana.ui.settings.ModelCatalog
 import com.adwewecat.nana.ui.settings.OriginOsSetupHelper
 import com.adwewecat.nana.voice.NaNaVoiceService
 import com.adwewecat.nana.voice.VoiceLoopState
@@ -339,5 +340,33 @@ class SettingsAndSetupHelperTest {
         activity.toggleVoiceService(false)
 
         assertNull(shadowApp.nextStartedService)
+    }
+
+    @Test(timeout = 15_000)
+    fun modelCatalogDefaultsToGemini38AndExposesGemini4And36And38Models() {
+        assertEquals("gemini-3.8-flash", ModelCatalog.defaultModelFor(ProviderType.GEMINI_VERTEX_EXPRESS))
+        assertEquals("gemini-3.8-flash", ModelCatalog.defaultModelFor(ProviderType.GEMINI_AI_STUDIO))
+        assertEquals("gemini-3.6-flash", ModelCatalog.defaultModelFor(ProviderType.FREE_GEMINI))
+
+        val geminiModels = ModelCatalog.suggestedModelsFor(ProviderType.GEMINI_VERTEX_EXPRESS, isTtsOnly = false)
+            .map { it.modelId }
+        assertTrue(geminiModels.containsAll(listOf(
+            "gemini-4-neon",
+            "gemini-4-carbon",
+            "gemini-4-argon",
+            "gemini-4-hydrogen",
+            "gemini-3.8-flash",
+            "gemini-3.6-flash",
+            "gemini-3.1-pro",
+            "gemini-2.5-flash",
+        )))
+
+        val ttsModels = ModelCatalog.suggestedModelsFor(ProviderType.GEMINI_AI_STUDIO, isTtsOnly = true)
+            .map { it.modelId }
+        assertTrue(ttsModels.containsAll(listOf(
+            "gemini-3.8-flash-tts",
+            "gemini-2.5-flash-tts",
+            "gemini-2.5-flash-preview-tts",
+        )))
     }
 }

@@ -113,12 +113,13 @@ private data class KeyPreset(
 )
 
 private val KEY_PRESETS = listOf(
-    KeyPreset("Gemini Pro #1", "Gemini Pro #1", ProviderType.GEMINI_VERTEX_EXPRESS, "gemini-2.5-flash", 1, false, false),
-    KeyPreset("Gemini Pro #2", "Gemini Pro #2", ProviderType.GEMINI_VERTEX_EXPRESS, "gemini-2.5-flash", 2, false, false),
+    KeyPreset("Gemini Pro #1", "Gemini Pro #1", ProviderType.GEMINI_VERTEX_EXPRESS, "gemini-3.8-flash", 1, false, false),
+    KeyPreset("Gemini Pro #2", "Gemini Pro #2", ProviderType.GEMINI_VERTEX_EXPRESS, "gemini-3.8-flash", 2, false, false),
+    KeyPreset("Gemini 4 Neon", "Gemini 4 Neon", ProviderType.GEMINI_VERTEX_EXPRESS, "gemini-4-neon", 1, false, false),
     KeyPreset("Claude", "Claude", ProviderType.CLAUDE, "claude-sonnet-4-5", 3, false, false),
     KeyPreset("ChatGPT", "ChatGPT", ProviderType.OPENAI, "gpt-4o-mini", 4, false, false),
-    KeyPreset("Free Key", "Em gái Free Key", ProviderType.FREE_GEMINI, "gemini-2.5-flash-lite", 1, true, false),
-    KeyPreset("Key TTS riêng", "TTS Riêng", ProviderType.GEMINI_AI_STUDIO, "gemini-2.5-flash-preview-tts", 1, false, true),
+    KeyPreset("Free Key", "Em gái Free Key", ProviderType.FREE_GEMINI, "gemini-3.6-flash", 1, true, false),
+    KeyPreset("Key TTS riêng", "TTS Riêng", ProviderType.GEMINI_AI_STUDIO, "gemini-3.8-flash-tts", 1, false, true),
 )
 
 /**
@@ -800,7 +801,7 @@ private fun ApiKeyEditorDialog(
     var label by remember { mutableStateOf(existing?.label ?: preset?.defaultLabel ?: "Gemini Pro") }
     var provider by remember { mutableStateOf(existing?.provider ?: preset?.provider ?: ProviderType.GEMINI_VERTEX_EXPRESS) }
     var rawKey by remember { mutableStateOf(existing?.apiKey.orEmpty()) }
-    var modelId by remember { mutableStateOf(existing?.modelId ?: preset?.defaultModelId ?: "gemini-2.5-flash") }
+    var modelId by remember { mutableStateOf(existing?.modelId ?: preset?.defaultModelId ?: ModelCatalog.defaultModelFor(provider)) }
     var priority by remember { mutableIntStateOf(existing?.priority ?: preset?.priority ?: nextPriority) }
     var isFreeTier by remember { mutableStateOf(existing?.isFreeTier ?: preset?.isFreeTier ?: false) }
     var isTtsOnly by remember { mutableStateOf(existing?.isTtsOnly ?: preset?.isTtsOnly ?: false) }
@@ -813,6 +814,9 @@ private fun ApiKeyEditorDialog(
         detectGeminiProvider(rawKey)
     } else {
         provider
+    }
+    val suggestedModels = remember(effectiveProvider, isTtsOnly) {
+        ModelCatalog.suggestedModelsFor(effectiveProvider, isTtsOnly)
     }
 
     AlertDialog(
@@ -842,7 +846,7 @@ private fun ApiKeyEditorDialog(
                                 isFreeTier = type == ProviderType.FREE_GEMINI ||
                                     type == ProviderType.FREE_OPENAI_COMPAT
                                 if (existing == null) {
-                                    modelId = defaultModelFor(type)
+                                    modelId = ModelCatalog.defaultModelFor(type, isTtsOnly)
                                 }
                             },
                             label = { Text(title) },
@@ -884,10 +888,30 @@ private fun ApiKeyEditorDialog(
                 OutlinedTextField(
                     value = modelId,
                     onValueChange = { modelId = it },
-                    label = { Text("Model ID") },
+                    label = { Text("Model ID (có thể nhập bất kỳ model mới nào)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+
+                if (suggestedModels.isNotEmpty()) {
+                    Text(
+                        text = "Chọn nhanh model:",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        suggestedModels.forEach { option ->
+                            FilterChip(
+                                selected = modelId.trim().equals(option.modelId, ignoreCase = true),
+                                onClick = { modelId = option.modelId },
+                                label = { Text(option.label) },
+                            )
+                        }
+                    }
+                }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -912,7 +936,12 @@ private fun ApiKeyEditorDialog(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(
                         checked = isTtsOnly,
-                        onCheckedChange = { isTtsOnly = it },
+                        onCheckedChange = { checked ->
+                            isTtsOnly = checked
+                            if (existing == null) {
+                                modelId = ModelCatalog.defaultModelFor(effectiveProvider, checked)
+                            }
+                        },
                     )
                     Text("Chỉ dùng đọc TTS", style = MaterialTheme.typography.bodyMedium)
                 }
@@ -926,7 +955,7 @@ private fun ApiKeyEditorDialog(
                         label = label.trim().ifEmpty { AppContainer.providerDisplayName(effectiveProvider) },
                         provider = effectiveProvider,
                         apiKey = rawKey.trim(),
-                        modelId = modelId.trim().ifEmpty { defaultModelFor(effectiveProvider) },
+                        modelId = modelId.trim().ifEmpty { ModelCatalog.defaultModelFor(effectiveProvider, isTtsOnly) },
                         priority = priority,
                         isFreeTier = isFreeTier,
                         isTtsOnly = isTtsOnly,
@@ -948,17 +977,6 @@ private fun ApiKeyEditorDialog(
             }
         },
     )
-}
-
-private fun defaultModelFor(provider: ProviderType): String = when (provider) {
-    ProviderType.GEMINI_VERTEX_EXPRESS,
-    ProviderType.GEMINI_AI_STUDIO,
-    -> "gemini-2.5-flash"
-    ProviderType.FREE_GEMINI -> "gemini-2.5-flash-lite"
-    ProviderType.CLAUDE -> "claude-sonnet-4-5"
-    ProviderType.OPENAI,
-    ProviderType.FREE_OPENAI_COMPAT,
-    -> "gpt-4o-mini"
 }
 
 private fun hasPermission(context: Context, permission: String): Boolean =

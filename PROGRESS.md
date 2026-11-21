@@ -4,6 +4,11 @@
 
 ## Recent Milestones
 
+- **[2026-11-21] Added Gemini 3.6 / 3.8 / 4.x model catalog, 1-tap picker chips & Vertex `v1beta1` fallback**
+  - **Done:** Updated Gemini Pro defaults from `gemini-2.5-flash` to `gemini-3.8-flash` (Free -> `gemini-3.6-flash`, TTS -> `gemini-3.8-flash-tts`), added `ModelCatalog` with 1-tap quick-select chips in `SettingsScreen` (`gemini-4-neon`, `gemini-4-carbon`, `gemini-4-argon`, `gemini-4-hydrogen`, `gemini-3.8-flash`, `gemini-3.6-flash`, `gemini-3.1-pro`, `gemini-2.5-flash`, plus TTS/Claude/ChatGPT options), and added automatic `/v1` -> `/v1beta1` HTTP 404 fallback in `GeminiClient` for Vertex AI Express `AQ.` keys.
+  - **Issues Fixed:** Settings dialog previously defaulted only to `gemini-2.5-flash` without quick-pick chips for newer Gemini 3.6 / 3.8 / 4.x models.
+  - **Next:** Install updated `app-debug.apk` on iQOO Z10 Turbo Pro and verify Gemini 3.8 / 3.6 / 4 Neon + Vietnamese female voice live.
+
 - **[2026-11-21] Fixed OriginOS 6 China ROM Vietnamese TTS ("đọc kiểu chữ Latin")**
   - **Done:** Added `TtsTextSanitizer` (strips markdown/URLs + natural Vietnamese chunking), zero-key online Vietnamese female TTS (`VietnameseWebTtsClient` + `VietnameseFallbackTts` using `MediaPlayer` with cute female pitch `1.16f` Na Na / `1.22f` Em gái), Vertex AI Express `AQ.` GA TTS model retry (`gemini-2.5-flash-tts`), hardened `AndroidSystemTtsEngine` (prefers `com.google.android.tts`, strictly refuses to speak Vietnamese through non-Vietnamese OEM engines), `<queries>` for `TTS_SERVICE`, and 1-tap TTS settings shortcut in Settings checklist. Verified 78/78 unit tests pass and rebuilt `app-debug.apk`.
   - **Issues Fixed:** Root cause on OriginOS 6 China ROM was Vivo's default Chinese/English TTS returning `LANG_NOT_SUPPORTED` for `vi-VN` while `AndroidSystemTtsEngine` still spoke Vietnamese text through it (causing Latin letter gibberish), combined with `AQ.` Express keys missing a zero-key Vietnamese neural fallback.

@@ -42,6 +42,25 @@ class GeminiClient(
             apiKeyToRedact = trimmedKey,
         )
 
+        // Newer Gemini 3.8 / 4.x models on Vertex AI Express (`AQ.`) may live under `v1beta1` before `v1`.
+        if (outcome is HttpCallResult.Response &&
+            outcome.code == 404 &&
+            isVertexExpressKey(key)
+        ) {
+            val betaUrl = resolveGenerateUrl(key = key, modelId = key.modelId, vertexApiVersion = "v1beta1")
+            val betaOutcome = LlmHttpSupport.postJson(
+                client = httpClient,
+                url = betaUrl,
+                headers = mapOf("x-goog-api-key" to trimmedKey),
+                payload = payload,
+                apiKeyToRedact = trimmedKey,
+            )
+            return when (betaOutcome) {
+                is HttpCallResult.Failure -> LlmResult.TransientError(betaOutcome.detail)
+                is HttpCallResult.Response -> parseGenerateOutcome(betaOutcome, trimmedKey)
+            }
+        }
+
         return when (outcome) {
             is HttpCallResult.Failure -> LlmResult.TransientError(outcome.detail)
             is HttpCallResult.Response -> parseGenerateOutcome(outcome, trimmedKey)
@@ -133,11 +152,15 @@ class GeminiClient(
         }
     }
 
-    private fun resolveGenerateUrl(key: ApiKeyEntry, modelId: String): String {
+    private fun resolveGenerateUrl(
+        key: ApiKeyEntry,
+        modelId: String,
+        vertexApiVersion: String = "v1",
+    ): String {
         val useVertexExpress = isVertexExpressKey(key)
         val sanitizedModel = modelId.trim()
         return if (useVertexExpress) {
-            "${vertexBaseUrl.trimEnd('/')}/v1/publishers/google/models/$sanitizedModel:generateContent"
+            "${vertexBaseUrl.trimEnd('/')}/$vertexApiVersion/publishers/google/models/$sanitizedModel:generateContent"
         } else {
             "${aiStudioBaseUrl.trimEnd('/')}/v1beta/models/$sanitizedModel:generateContent"
         }

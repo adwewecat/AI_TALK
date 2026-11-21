@@ -123,4 +123,40 @@ class VietnameseWebTtsTest {
         assertTrue(req1.path.orEmpty().contains("gemini-2.5-flash-preview-tts:generateContent"))
         assertTrue(req2.path.orEmpty().contains("gemini-2.5-flash-tts:generateContent"))
     }
+
+    @Test
+    fun geminiVertexExpressRetriesV1Beta1On404ForNewGemini4And38Models() = runTest {
+        server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":{"code":404,"message":"Model not in v1"}}"""))
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody("""{"candidates":[{"content":{"parts":[{"text":"Chào anh yêu từ Gemini 4 Neon!"}]}}]}"""),
+        )
+
+        val baseUrl = server.url("/").toString().trimEnd('/')
+        val client = GeminiClient(httpClient = OkHttpClient(), vertexBaseUrl = baseUrl, aiStudioBaseUrl = baseUrl)
+        val aqKey = ApiKeyEntry(
+            id = "aq-4",
+            label = "Gemini 4 Neon",
+            provider = ProviderType.GEMINI_VERTEX_EXPRESS,
+            apiKey = "AQ.synthetic-vertex-key-gemini4",
+            modelId = "gemini-4-neon",
+            priority = 1,
+            isFreeTier = false,
+        )
+
+        val result = client.generate(
+            key = aqKey,
+            request = LlmRequest(systemPrompt = "Na Na", history = emptyList(), userText = "Xin chào", enableTools = false),
+        )
+
+        assertTrue("Expected Success after v1beta1 fallback, got $result", result is LlmResult.Success)
+        assertEquals("Chào anh yêu từ Gemini 4 Neon!", (result as LlmResult.Success).replyText)
+
+        val req1 = server.takeRequest()
+        val req2 = server.takeRequest()
+        assertEquals("/v1/publishers/google/models/gemini-4-neon:generateContent", req1.path)
+        assertEquals("/v1beta1/publishers/google/models/gemini-4-neon:generateContent", req2.path)
+    }
 }
