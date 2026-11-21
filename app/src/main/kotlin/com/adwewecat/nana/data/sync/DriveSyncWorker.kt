@@ -139,8 +139,11 @@ class DriveSyncWorker : CoroutineWorker {
             }
 
             override fun onAvailable(network: Network) {
-                val caps = cm?.getNetworkCapabilities(network)
-                if (!AndroidWifiNetworkChecker.isUnmeteredWifi(caps) || !deps.wifiChecker.isUnmeteredWifiConnected()) {
+                // Android 10+ warns that capabilities may be null inside onAvailable before
+                // onCapabilitiesChanged fires; only cancel here if capabilities are populated
+                // and explicitly non-unmetered Wi-Fi.
+                val caps = cm?.getNetworkCapabilities(network) ?: return
+                if (!AndroidWifiNetworkChecker.isUnmeteredWifi(caps)) {
                     cancelIfWifiLost()
                 }
             }
