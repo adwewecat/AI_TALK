@@ -1,0 +1,5 @@
+# Copy this file to local.properties (never commit local.properties)
+# Point sdk.dir to your local Android SDK installation
+# sdk.dir=C:\\Users\\<USER>\\AppData\\Local\\Android\\Sdk
+# Optional Google OAuth Android Client ID (never commit real secrets)
+# GOOGLE_OAUTH_CLIENT_ID=your-android-client-id.apps.googleusercontent.com
