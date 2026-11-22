@@ -1,5 +1,7 @@
 package com.adwewecat.nana.ui.home
 
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -31,12 +33,12 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Stop
-import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.WifiOff
@@ -49,6 +51,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFloatingActionButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -57,6 +60,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -65,15 +69,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.adwewecat.nana.core.model.ChatMessage
 import com.adwewecat.nana.core.model.PersonaMode
 import com.adwewecat.nana.core.model.QuotaState
 import com.adwewecat.nana.core.sync.SyncOutcome
 import com.adwewecat.nana.data.auth.DriveAuthStatus
+import com.adwewecat.nana.ui.settings.OriginOsSetupHelper
 import com.adwewecat.nana.ui.theme.NaNaPalette
 import com.adwewecat.nana.voice.VoiceLoopState
 import com.adwewecat.nana.voice.VoiceUiSnapshot
@@ -91,6 +98,7 @@ fun CompanionHomeScreen(
     voiceState: VoiceUiSnapshot,
     isServiceRunning: Boolean,
     isWakeModelAvailable: Boolean,
+    resumeTick: Int = 0,
     authStatus: DriveAuthStatus,
     isSyncing: Boolean,
     lastSyncOutcome: SyncOutcome?,
@@ -99,9 +107,17 @@ fun CompanionHomeScreen(
     onPushToTalk: () -> Unit,
     onSendText: (String) -> Unit,
     onReplayMessage: (ChatMessage) -> Unit = {},
+    onRequestMicPermission: () -> Unit = {},
     onSyncNow: () -> Unit,
     onSignInDrive: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val micGranted = remember(resumeTick) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    }
+    val batteryUnrestricted = remember(resumeTick) {
+        OriginOsSetupHelper.isIgnoringBatteryOptimizations(context)
+    }
     var draftText by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
 
@@ -183,6 +199,60 @@ fun CompanionHomeScreen(
                         ),
                     ) {
                         Text("Đăng nhập lại Google Drive", maxLines = 1)
+                    }
+                }
+            }
+        }
+
+        if (!micGranted || !batteryUnrestricted) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Card(
+                colors = CardDefaults.cardColors(containerColor = NaNaPalette.DeepPlum),
+                border = BorderStroke(1.dp, NaNaPalette.SakuraPink.copy(alpha = 0.45f)),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    Text(
+                        text = "Thiết lập 1 lần để gọi \"Na Na\" chạy ngầm mọi lúc:",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = NaNaPalette.SakuraPink,
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (!micGranted) {
+                            FilledTonalButton(
+                                onClick = onRequestMicPermission,
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            ) {
+                                Text("Cấp quyền Micro")
+                            }
+                        }
+                        if (!batteryUnrestricted) {
+                            FilledTonalButton(
+                                onClick = {
+                                    OriginOsSetupHelper.launchSafely(
+                                        context,
+                                        OriginOsSetupHelper.batteryOptimizationIntent(context),
+                                    )
+                                },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            ) {
+                                Text("Cho phép chạy nền")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    OriginOsSetupHelper.launchSafely(
+                                        context,
+                                        OriginOsSetupHelper.autostartIntent(context),
+                                    )
+                                },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            ) {
+                                Text("Autostart")
+                            }
+                        }
                     }
                 }
             }
@@ -604,7 +674,7 @@ private fun ChatBubbleItem(
                     )
                     if (!isUser) {
                         Icon(
-                            imageVector = Icons.Rounded.VolumeUp,
+                            imageVector = Icons.AutoMirrored.Rounded.VolumeUp,
                             contentDescription = "Nghe lại",
                             tint = NaNaPalette.SakuraPink,
                             modifier = Modifier

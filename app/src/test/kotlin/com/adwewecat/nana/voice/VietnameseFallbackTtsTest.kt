@@ -139,4 +139,17 @@ class VietnameseFallbackTtsTest {
         )
         assertEquals(1f, BuiltInMicAudioInput.computeNormalizedMicLevel(5_000.0), 0.001f)
     }
+
+    @Test(timeout = 15_000)
+    fun backgroundAlwaysOnDefaultsAndWakeGreetingCacheWorkCleanly() {
+        val defaults = com.adwewecat.nana.data.local.AppSettings()
+        assertTrue("Wake word should be ON by default", defaults.wakeWordEnabled)
+        assertTrue("Screen-off wake lock should be ON by default for background 'Na Na'", defaults.screenOffWakeLock)
+
+        val player = AndroidAudioPlayer(context)
+        val greetingPcm = byteArrayOf(0x10, 0x20, 0x30, 0x40, 0x50, 0x60)
+        player.cacheWakeGreeting(greetingPcm)
+        org.junit.Assert.assertArrayEquals(greetingPcm, player.getCachedWakeGreeting())
+        java.io.File(context.filesDir, AndroidAudioPlayer.WAKE_GREETING_CACHE_FILE).delete()
+    }
 }

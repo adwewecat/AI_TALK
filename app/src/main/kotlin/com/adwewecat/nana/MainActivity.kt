@@ -55,6 +55,11 @@ class MainActivity : ComponentActivity() {
             } else {
                 snackbarMessages.tryEmit("Cần quyền Micro để bật giọng nói Na Na.")
             }
+        } else if (hasPermission(Manifest.permission.RECORD_AUDIO) &&
+            container.settingsFlow.value.wakeWordEnabled &&
+            !NaNaVoiceService.isRunning.value
+        ) {
+            dispatchVoiceService(NaNaVoiceService.ACTION_START)
         }
     }
 
@@ -128,15 +133,27 @@ class MainActivity : ComponentActivity() {
         if (hasPermission(Manifest.permission.READ_PHONE_STATE)) {
             runCatching { container.callStateMonitor.start() }
         }
+        // Automatically launch hands-free background "Na Na" service whenever mic permission is granted
+        // and the user has not explicitly turned wake-word off, minimizing manual setup.
+        if (!"robolectric".equals(Build.FINGERPRINT, ignoreCase = true) &&
+            container.settingsFlow.value.wakeWordEnabled &&
+            hasPermission(Manifest.permission.RECORD_AUDIO) &&
+            !NaNaVoiceService.isRunning.value
+        ) {
+            dispatchVoiceService(NaNaVoiceService.ACTION_START)
+        }
     }
 
     internal fun toggleVoiceService(enable: Boolean) {
         if (enable) {
             container.updateSettings { it.copy(wakeWordEnabled = true) }
             startVoiceActionWithPermission(NaNaVoiceService.ACTION_START)
-        } else if (NaNaVoiceService.isRunning.value) {
-            runCatching {
-                stopService(Intent(this, NaNaVoiceService::class.java))
+        } else {
+            container.updateSettings { it.copy(wakeWordEnabled = false) }
+            if (NaNaVoiceService.isRunning.value) {
+                runCatching {
+                    stopService(Intent(this, NaNaVoiceService::class.java))
+                }
             }
         }
     }

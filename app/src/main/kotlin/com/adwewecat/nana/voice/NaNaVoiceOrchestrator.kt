@@ -83,6 +83,7 @@ class NaNaVoiceOrchestrator(
     private val turnMutex = Mutex()
     private val memoryExtractionMutex = Mutex()
     private val tiredPromptPrecacheAttempted = AtomicBoolean(false)
+    private val wakeGreetingPrecacheAttempted = AtomicBoolean(false)
     private val _uiState = MutableStateFlow(
         VoiceUiSnapshot(
             loopState = VoiceLoopState.IDLE_WAKE,
@@ -232,6 +233,45 @@ class NaNaVoiceOrchestrator(
                 micLevel = 0f,
                 statusMessage = idleStatusMessage(stateMachine.state),
             )
+        }
+    }
+
+    /**
+     * Plays an instant hands-free spoken acknowledgment ("Dạ em nghe!") when the user calls "Na Na"
+     * in the background. Uses pre-cached neural PCM (~50ms latency, zero network calls) or falls
+     * back to [localFallbackTts] while pre-caching the neural voice for subsequent wake-ups.
+     */
+    suspend fun playInstantWakeGreeting() {
+        val persona = stateMachine.activePersona
+        val cached = audioPlayer.getCachedWakeGreeting()
+        if (cached != null && cached.isNotEmpty()) {
+            audioPlayer.playPcm(cached, AndroidAudioPlayer.DEFAULT_SAMPLE_RATE_HZ)
+            return
+        }
+        localFallbackTts.speak(WAKE_GREETING_TEXT, persona)
+        precacheWakeGreetingIfNeeded()
+    }
+
+    /** Pre-caches Na Na's instant wake greeting in background once so hands-free responses play in ~50ms. */
+    fun precacheWakeGreetingIfNeeded() {
+        val scope = backgroundScope ?: return
+        if (audioPlayer.getCachedWakeGreeting() != null) return
+        if (!wakeGreetingPrecacheAttempted.compareAndSet(false, true)) return
+        scope.launch {
+            try {
+                val audio = ttsRouter.synthesizeCloudOnly(
+                    text = WAKE_GREETING_TEXT,
+                    persona = PersonaMode.NANA,
+                    preferredGeminiVoice = settingsProvider().preferredGeminiVoice,
+                )
+                if (audio != null && audio.pcmBytes.isNotEmpty()) {
+                    audioPlayer.cacheWakeGreeting(audio.pcmBytes)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Best-effort offline cache should never surface errors.
+            }
         }
     }
 
@@ -656,7 +696,8 @@ class NaNaVoiceOrchestrator(
             "Na Na sẵn sàng"
         }
 
-    private companion object {
-        const val MAX_HISTORY_MESSAGES = 20
+    companion object {
+        const val WAKE_GREETING_TEXT = "Dạ em nghe!"
+        private const val MAX_HISTORY_MESSAGES = 20
     }
 }

@@ -14,7 +14,7 @@ import kotlinx.serialization.json.Json
 @Serializable
 data class AppSettings(
     val wakeWordEnabled: Boolean = true,
-    val screenOffWakeLock: Boolean = false,
+    val screenOffWakeLock: Boolean = true,
     val silenceTimeoutSec: Int = 15,
     val preferredGeminiVoice: String = "Aoede",
     val emGaiHandoffEnabled: Boolean = true,

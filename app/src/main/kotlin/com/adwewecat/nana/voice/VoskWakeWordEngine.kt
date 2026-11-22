@@ -77,12 +77,6 @@ class VoskWakeWordEngine(
             LibVosk.setLogLevel(LogLevel.WARNINGS)
             model = Model(modelDir(appContext).absolutePath)
             recognizer = Recognizer(model, BuiltInMicAudioInput.SAMPLE_RATE_HZ.toFloat(), WAKE_GRAMMAR_JSON)
-            audioRecord = BuiltInMicAudioInput.openBuiltInMicAudioRecord(appContext) ?: return
-
-            audioRecord.startRecording()
-            if (audioRecord.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-                return
-            }
 
             val vad = EnergyVad(
                 speechRmsThreshold = 140.0,
@@ -93,53 +87,97 @@ class VoskWakeWordEngine(
             var preRollFrame: ShortArray? = null
             var lastWakeAtMs = 0L
 
+            // Self-healing loop: if another app (phone call, Zalo, camera) temporarily claims the mic,
+            // release AudioRecord and retry every 2.5s so hands-free "Na Na" recovers automatically.
             while (running.get() && !Thread.currentThread().isInterrupted) {
-                val readCount = audioRecord.read(buffer, 0, buffer.size)
-                if (readCount <= 0) {
+                audioRecord = BuiltInMicAudioInput.openBuiltInMicAudioRecord(appContext)
+                val rec = audioRecord
+                if (rec == null) {
+                    sleepQuietly(MIC_RETRY_DELAY_MS)
                     continue
                 }
 
-                val rms = vad.computeRms(buffer, readCount)
-                onMicLevel(BuiltInMicAudioInput.computeNormalizedMicLevel(rms))
+                try {
+                    rec.startRecording()
+                    if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                        releaseAudioRecord(rec)
+                        audioRecord = null
+                        sleepQuietly(MIC_RETRY_DELAY_MS)
+                        continue
+                    }
 
-                val frame = if (readCount == buffer.size) buffer.copyOf() else buffer.copyOf(readCount)
-                val frameDurationMs = (readCount * 1_000L) / BuiltInMicAudioInput.SAMPLE_RATE_HZ
-                val vadEvent = vad.feedFrame(frame, frameDurationMs)
+                    var consecutiveReadErrors = 0
+                    while (running.get() && !Thread.currentThread().isInterrupted) {
+                        val readCount = rec.read(buffer, 0, buffer.size)
+                        if (readCount < 0) {
+                            // AudioRecord invalidated by phone call / audio focus loss -> reopen cleanly.
+                            break
+                        }
+                        if (readCount == 0) {
+                            consecutiveReadErrors++
+                            if (consecutiveReadErrors >= MAX_EMPTY_READS_BEFORE_REOPEN) {
+                                break
+                            }
+                            sleepQuietly(40L)
+                            continue
+                        }
+                        consecutiveReadErrors = 0
 
-                if (vadEvent == VadEvent.IDLE) {
-                    preRollFrame = frame
-                    continue
-                }
+                        val rms = vad.computeRms(buffer, readCount)
+                        onMicLevel(BuiltInMicAudioInput.computeNormalizedMicLevel(rms))
 
-                if (vadEvent == VadEvent.SPEECH_STARTED && preRollFrame != null) {
-                    recognizer.acceptWaveForm(preRollFrame, preRollFrame.size)
+                        val frame = if (readCount == buffer.size) buffer.copyOf() else buffer.copyOf(readCount)
+                        val frameDurationMs = (readCount * 1_000L) / BuiltInMicAudioInput.SAMPLE_RATE_HZ
+                        val vadEvent = vad.feedFrame(frame, frameDurationMs)
+
+                        if (vadEvent == VadEvent.IDLE) {
+                            preRollFrame = frame
+                            continue
+                        }
+
+                        if (vadEvent == VadEvent.SPEECH_STARTED && preRollFrame != null) {
+                            recognizer.acceptWaveForm(preRollFrame, preRollFrame.size)
+                            preRollFrame = null
+                        }
+
+                        val isFinalized = recognizer.acceptWaveForm(frame, readCount)
+                        val transcript = extractTranscript(
+                            if (isFinalized) recognizer.result else recognizer.partialResult,
+                        )
+
+                        val wakeDetected = if (transcript != null && FastCommandParser.matchesWakeWord(transcript)) {
+                            true
+                        } else if (vadEvent == VadEvent.UTTERANCE_COMPLETE) {
+                            val finalText = extractTranscript(recognizer.finalResult)
+                            recognizer.reset()
+                            finalText != null && FastCommandParser.matchesWakeWord(finalText)
+                        } else {
+                            false
+                        }
+
+                        if (wakeDetected) {
+                            val nowMs = System.currentTimeMillis()
+                            if (nowMs - lastWakeAtMs >= WAKE_COOLDOWN_MS) {
+                                lastWakeAtMs = nowMs
+                                recognizer.reset()
+                                vad.reset()
+                                preRollFrame = null
+                                onWakeDetected()
+                            }
+                        }
+                    }
+                } catch (_: RuntimeException) {
+                    // Recover after transient audio hardware interruption.
+                } finally {
+                    onMicLevel(0f)
+                    releaseAudioRecord(rec)
+                    audioRecord = null
+                    vad.reset()
                     preRollFrame = null
                 }
 
-                val isFinalized = recognizer.acceptWaveForm(frame, readCount)
-                val transcript = extractTranscript(
-                    if (isFinalized) recognizer.result else recognizer.partialResult,
-                )
-
-                val wakeDetected = if (transcript != null && FastCommandParser.matchesWakeWord(transcript)) {
-                    true
-                } else if (vadEvent == VadEvent.UTTERANCE_COMPLETE) {
-                    val finalText = extractTranscript(recognizer.finalResult)
-                    recognizer.reset()
-                    finalText != null && FastCommandParser.matchesWakeWord(finalText)
-                } else {
-                    false
-                }
-
-                if (wakeDetected) {
-                    val nowMs = System.currentTimeMillis()
-                    if (nowMs - lastWakeAtMs >= WAKE_COOLDOWN_MS) {
-                        lastWakeAtMs = nowMs
-                        recognizer.reset()
-                        vad.reset()
-                        preRollFrame = null
-                        onWakeDetected()
-                    }
+                if (running.get() && !Thread.currentThread().isInterrupted) {
+                    sleepQuietly(MIC_RETRY_DELAY_MS)
                 }
             }
         } catch (_: IOException) {
@@ -150,17 +188,27 @@ class VoskWakeWordEngine(
             // Gracefully degrade on JVM environments without native Vosk libraries.
         } finally {
             onMicLevel(0f)
-            runCatching {
-                audioRecord?.let { rec ->
-                    if (rec.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                        rec.stop()
-                    }
-                    rec.release()
-                }
-            }
+            audioRecord?.let(::releaseAudioRecord)
             runCatching { recognizer?.close() }
             runCatching { model?.close() }
             running.set(false)
+        }
+    }
+
+    private fun releaseAudioRecord(rec: AudioRecord) {
+        runCatching {
+            if (rec.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                rec.stop()
+            }
+            rec.release()
+        }
+    }
+
+    private fun sleepQuietly(ms: Long) {
+        try {
+            Thread.sleep(ms)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
         }
     }
 
@@ -169,6 +217,8 @@ class VoskWakeWordEngine(
         private const val FRAME_SAMPLES = 1_600
         private const val STOP_JOIN_TIMEOUT_MS = 300L
         private const val WAKE_COOLDOWN_MS = 1_500L
+        private const val MIC_RETRY_DELAY_MS = 2_500L
+        private const val MAX_EMPTY_READS_BEFORE_REOPEN = 25
         private const val WAKE_GRAMMAR_JSON =
             """["na na", "nana", "na na ơi", "nana ơi", "na nà", "na ná", "nà na", "ná na", "ơi na na", "[unk]"]"""
         private const val CONSENT_GRAMMAR_JSON =

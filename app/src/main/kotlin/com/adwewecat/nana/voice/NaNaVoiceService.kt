@@ -79,6 +79,7 @@ class NaNaVoiceService : Service() {
     private var wakeWordEngine: WakeWordEngine? = null
     private var activeLoopJob: Job? = null
     private var uiObserverJob: Job? = null
+    private var wakeLockRenewalJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private val finishCaptureRequested = AtomicBoolean(false)
     private val pauseForTextChatRequested = AtomicBoolean(false)
@@ -116,6 +117,7 @@ class NaNaVoiceService : Service() {
 
         _isRunning.value = true
         syncWakeLockWithSettings(currentRuntime.settingsProvider())
+        currentRuntime.orchestrator.precacheWakeGreetingIfNeeded()
 
         when (action) {
             ACTION_PUSH_TO_TALK -> triggerPushToTalk(currentRuntime)
@@ -127,6 +129,11 @@ class NaNaVoiceService : Service() {
             }
         }
         return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // Keep foreground wake-word service alive when user swipes the UI card out of Recents.
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
@@ -264,7 +271,11 @@ class NaNaVoiceService : Service() {
         pauseForTextChatRequested.set(false)
         activeLoopJob = serviceScope.launch {
             currentRuntime.orchestrator.onWakeWordDetected()
-            playListeningBeep()
+            // Speak an immediate, pre-cached "Dạ em nghe!" acknowledgement when woken hands-free
+            // so the user hears Na Na answer right away even with the screen off or in another app.
+            if (currentRuntime.orchestrator.uiState.value.loopState == VoiceLoopState.LISTENING) {
+                currentRuntime.orchestrator.playInstantWakeGreeting()
+            }
             runActiveTurnLoop(currentRuntime)
         }
     }
@@ -457,22 +468,39 @@ class NaNaVoiceService : Service() {
 
     private fun syncWakeLockWithSettings(settings: AppSettings) {
         if (settings.screenOffWakeLock) {
-            if (wakeLock?.isHeld != true) {
-                val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
-                val lock = wakeLock ?: pm.newWakeLock(
-                    PowerManager.PARTIAL_WAKE_LOCK,
-                    WAKE_LOCK_TAG,
-                ).apply {
-                    setReferenceCounted(false)
-                }.also { wakeLock = it }
-                lock.acquire(WAKE_LOCK_TIMEOUT_MS)
+            acquireOrRenewWakeLock()
+            if (wakeLockRenewalJob?.isActive != true) {
+                wakeLockRenewalJob = serviceScope.launch {
+                    while (isActive && _isRunning.value) {
+                        kotlinx.coroutines.delay(WAKE_LOCK_RENEW_INTERVAL_MS)
+                        if (runtime?.settingsProvider?.invoke()?.screenOffWakeLock == true) {
+                            acquireOrRenewWakeLock()
+                        } else {
+                            releaseWakeLock()
+                            break
+                        }
+                    }
+                }
             }
         } else {
             releaseWakeLock()
         }
     }
 
+    private fun acquireOrRenewWakeLock() {
+        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+        val lock = wakeLock ?: pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            WAKE_LOCK_TAG,
+        ).apply {
+            setReferenceCounted(false)
+        }.also { wakeLock = it }
+        runCatching { lock.acquire(WAKE_LOCK_TIMEOUT_MS) }
+    }
+
     private fun releaseWakeLock() {
+        wakeLockRenewalJob?.cancel()
+        wakeLockRenewalJob = null
         runCatching {
             wakeLock?.let { lock ->
                 if (lock.isHeld) {
@@ -627,6 +655,7 @@ class NaNaVoiceService : Service() {
         private const val MIN_MANUAL_SEND_PCM_BYTES = 16_000 * 2 / 4
         private const val WAKE_LOCK_TAG = "NaNa:VoiceWakeLock"
         private const val WAKE_LOCK_TIMEOUT_MS = 30 * 60 * 1_000L
+        private const val WAKE_LOCK_RENEW_INTERVAL_MS = 20 * 60 * 1_000L
 
         @Volatile
         private var activeInstance: NaNaVoiceService? = null

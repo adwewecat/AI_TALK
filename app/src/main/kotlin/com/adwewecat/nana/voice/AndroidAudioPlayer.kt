@@ -21,11 +21,15 @@ interface AudioPlaybackEngine {
     fun getCachedTiredPrompt(): ByteArray?
 
     fun cacheTiredPrompt(pcmBytes: ByteArray)
+
+    fun getCachedWakeGreeting(): ByteArray? = null
+
+    fun cacheWakeGreeting(pcmBytes: ByteArray) = Unit
 }
 
 /**
- * [AudioTrack] PCM player (defaulting to 24kHz 16-bit mono) that also caches the local
- * tired consent prompt (`tired_consent_prompt.pcm`) in `filesDir`.
+ * [AudioTrack] PCM player (defaulting to 24kHz 16-bit mono) that also caches local prompts
+ * (`tired_consent_prompt.pcm` and `wake_greeting.pcm`) in `filesDir`.
  */
 class AndroidAudioPlayer(
     context: Context,
@@ -34,6 +38,8 @@ class AndroidAudioPlayer(
     private val appContext = context.applicationContext
     private val cachedPromptFile: File
         get() = File(appContext.filesDir, TIRED_PROMPT_CACHE_FILE)
+    private val cachedWakeGreetingFile: File
+        get() = File(appContext.filesDir, WAKE_GREETING_CACHE_FILE)
 
     override suspend fun playPcm(pcmBytes: ByteArray, sampleRateHz: Int) {
         if (pcmBytes.isEmpty() || sampleRateHz <= 0) {
@@ -109,8 +115,15 @@ class AndroidAudioPlayer(
         }
     }
 
-    override fun getCachedTiredPrompt(): ByteArray? {
-        val file = cachedPromptFile
+    override fun getCachedTiredPrompt(): ByteArray? = readCachedFile(cachedPromptFile)
+
+    override fun cacheTiredPrompt(pcmBytes: ByteArray) = writeCachedFile(cachedPromptFile, pcmBytes)
+
+    override fun getCachedWakeGreeting(): ByteArray? = readCachedFile(cachedWakeGreetingFile)
+
+    override fun cacheWakeGreeting(pcmBytes: ByteArray) = writeCachedFile(cachedWakeGreetingFile, pcmBytes)
+
+    private fun readCachedFile(file: File): ByteArray? {
         if (!file.exists() || file.length() <= 0L) {
             return null
         }
@@ -121,14 +134,13 @@ class AndroidAudioPlayer(
         }
     }
 
-    override fun cacheTiredPrompt(pcmBytes: ByteArray) {
+    private fun writeCachedFile(target: File, pcmBytes: ByteArray) {
         if (pcmBytes.isEmpty()) {
             return
         }
         try {
-            val target = cachedPromptFile
             target.parentFile?.mkdirs()
-            val temp = File(target.parentFile, "$TIRED_PROMPT_CACHE_FILE.tmp")
+            val temp = File(target.parentFile, "${target.name}.tmp")
             temp.writeBytes(pcmBytes)
             if (!temp.renameTo(target)) {
                 target.writeBytes(pcmBytes)
@@ -142,6 +154,7 @@ class AndroidAudioPlayer(
     companion object {
         const val DEFAULT_SAMPLE_RATE_HZ = 24_000
         const val TIRED_PROMPT_CACHE_FILE = "tired_consent_prompt.pcm"
+        const val WAKE_GREETING_CACHE_FILE = "wake_greeting.pcm"
         private const val DEFAULT_MIN_BUFFER_BYTES = 4_096
         private const val MAX_STREAM_BUFFER_BYTES = 16_384
         private const val WRITE_CHUNK_BYTES = 4_096

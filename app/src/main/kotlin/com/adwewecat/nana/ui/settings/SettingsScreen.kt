@@ -334,7 +334,7 @@ fun SettingsScreen(
 
                 SettingSwitchRow(
                     title = "Giữ CPU thức khi tắt màn hình",
-                    subtitle = "Tắt mặc định để tiết kiệm pin. Bật nếu muốn gọi \"Na Na\" ngay cả khi màn hình tắt lâu.",
+                    subtitle = "Bật mặc định để bạn gọi \"Na Na\" là lên tiếng ngay cả khi màn hình đang tắt.",
                     checked = settings.screenOffWakeLock,
                     onCheckedChange = { enabled ->
                         onUpdateSettings { it.copy(screenOffWakeLock = enabled) }

@@ -160,6 +160,7 @@ fun NaNaApp(
                     voiceState = voiceState,
                     isServiceRunning = isServiceRunning,
                     isWakeModelAvailable = isWakeModelAvailable,
+                    resumeTick = resumeTick,
                     authStatus = authStatus,
                     isSyncing = isSyncing,
                     lastSyncOutcome = lastSyncOutcome,
@@ -168,6 +169,7 @@ fun NaNaApp(
                     onPushToTalk = onPushToTalk,
                     onSendText = { text -> container.sendTextChatAsync(text) },
                     onReplayMessage = { msg -> container.replayMessageAsync(msg.content, msg.persona) },
+                    onRequestMicPermission = onRequestMicPermission,
                     onSyncNow = runWifiSyncWithFeedback,
                     onSignInDrive = onSignInDrive,
                 )
