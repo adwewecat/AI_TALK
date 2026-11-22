@@ -30,6 +30,7 @@ class AiChatRouter(
     private val geminiClient: GeminiClient,
     private val openAiClient: OpenAiClient,
     private val claudeClient: ClaudeClient,
+    private val clockMs: () -> Long = { System.currentTimeMillis() },
 ) {
 
     /**
@@ -46,7 +47,7 @@ class AiChatRouter(
     ): RoutedChatReply {
         val isLittleSister = stateMachine.state == QuotaState.ACTIVE_LITTLE_SISTER
         val persona = if (isLittleSister) PersonaMode.LITTLE_SISTER else PersonaMode.NANA
-        val systemPrompt = PersonaPromptBuilder.buildSystemPrompt(persona, memories)
+        val systemPrompt = PersonaPromptBuilder.buildSystemPrompt(persona, memories, nowMs = clockMs())
 
         val attemptedKeyIds = mutableSetOf<String>()
         var cachedTranscript: String? = null

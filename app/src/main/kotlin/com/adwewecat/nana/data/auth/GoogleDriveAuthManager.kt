@@ -34,6 +34,7 @@ data class DriveAuthStatus(
     val email: String? = null,
     val needsReauth: Boolean = false,
     val isOAuthConfigured: Boolean = false,
+    val lastErrorMessage: String? = null,
 )
 
 /**
@@ -79,6 +80,11 @@ class GoogleDriveAuthManager(
             redirectUriFor(clientId),
         )
             .setScopes(SCOPE_OPENID, SCOPE_EMAIL, SCOPE_PROFILE, SCOPE_DRIVE_FILE)
+            .setPromptValues(
+                AuthorizationRequest.Prompt.SELECT_ACCOUNT,
+                AuthorizationRequest.Prompt.CONSENT,
+            )
+            .setAdditionalParameters(mapOf("access_type" to "offline"))
             .build()
         return authService.getAuthorizationRequestIntent(request)
     }
@@ -91,8 +97,11 @@ class GoogleDriveAuthManager(
         val authResponse = AuthorizationResponse.fromIntent(data)
         val authException = AuthorizationException.fromIntent(data)
         if (authResponse == null) {
+            val detail = formatAuthException(authException)
             if (isInvalidGrant(authException)) {
-                markNeedsReauthLocked()
+                markNeedsReauthLocked(lastErrorMessage = detail)
+            } else {
+                _authStateFlow.value = buildCurrentStatus(lastErrorMessage = detail)
             }
             return@withLock false
         }
@@ -102,10 +111,13 @@ class GoogleDriveAuthManager(
         updatedState.update(tokenResponse, tokenException)
 
         if (tokenException != null || tokenResponse == null) {
+            val detail = formatAuthException(tokenException) ?: "Không đổi được mã xác thực Google Drive."
             if (isInvalidGrant(tokenException)) {
                 authState = updatedState
                 vault.saveAuthStateJson(updatedState.jsonSerializeString())
-                markNeedsReauthLocked()
+                markNeedsReauthLocked(lastErrorMessage = detail)
+            } else {
+                _authStateFlow.value = buildCurrentStatus(lastErrorMessage = detail)
             }
             return@withLock false
         }
@@ -113,7 +125,7 @@ class GoogleDriveAuthManager(
         authState = updatedState
         vault.saveNeedsReauth(false)
         vault.saveAuthStateJson(updatedState.jsonSerializeString())
-        _authStateFlow.value = buildCurrentStatus()
+        _authStateFlow.value = buildCurrentStatus(lastErrorMessage = null)
         true
     }
 
@@ -188,7 +200,7 @@ class GoogleDriveAuthManager(
         authService.dispose()
     }
 
-    private fun markNeedsReauthLocked() {
+    private fun markNeedsReauthLocked(lastErrorMessage: String? = null) {
         vault.saveNeedsReauth(true)
         val preservedEmail = extractEmail(authState) ?: _authStateFlow.value.email
         _authStateFlow.value = DriveAuthStatus(
@@ -196,7 +208,19 @@ class GoogleDriveAuthManager(
             email = preservedEmail,
             needsReauth = true,
             isOAuthConfigured = isOAuthConfigured(),
+            lastErrorMessage = lastErrorMessage,
         )
+    }
+
+    private fun formatAuthException(ex: AuthorizationException?): String? {
+        if (ex == null) return null
+        return listOfNotNull(ex.error, ex.errorDescription)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .joinToString(": ")
+            .ifBlank { ex.message?.trim() }
+            ?.take(220)
     }
 
     private suspend fun performTokenExchange(
@@ -229,7 +253,7 @@ class GoogleDriveAuthManager(
         }
     }
 
-    private fun buildCurrentStatus(): DriveAuthStatus {
+    private fun buildCurrentStatus(lastErrorMessage: String? = null): DriveAuthStatus {
         val state = authState
         val needsReauth = vault.loadNeedsReauth() || isInvalidGrant(state?.authorizationException)
         val signedIn = !needsReauth && state?.isAuthorized == true
@@ -238,6 +262,7 @@ class GoogleDriveAuthManager(
             email = extractEmail(state),
             needsReauth = needsReauth,
             isOAuthConfigured = isOAuthConfigured(),
+            lastErrorMessage = lastErrorMessage,
         )
     }
 

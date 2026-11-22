@@ -414,7 +414,7 @@ private fun categoryLabel(category: MemoryCategory): String = when (category) {
 }
 
 private val HISTORY_DATE_FORMATTER: DateTimeFormatter =
-    DateTimeFormatter.ofPattern("dd/MM HH:mm").withZone(ZoneId.systemDefault())
+    DateTimeFormatter.ofPattern("dd/MM HH:mm").withZone(ZoneId.of("Asia/Ho_Chi_Minh"))
 
 private fun formatDateTime(epochMs: Long): String =
     runCatching { HISTORY_DATE_FORMATTER.format(Instant.ofEpochMilli(epochMs)) }.getOrDefault("")

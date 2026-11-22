@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.adwewecat.nana.core.sync.SyncOutcome
+import com.adwewecat.nana.data.auth.DriveAuthStatus
 import com.adwewecat.nana.di.AppContainer
 import com.adwewecat.nana.ui.NaNaApp
 import com.adwewecat.nana.ui.theme.NaNaTheme
@@ -89,7 +90,14 @@ class MainActivity : ComponentActivity() {
                 snackbarMessages.tryEmit("Đăng nhập Google Drive thành công!")
                 container.syncScheduler.enqueueSync()
             } else {
-                snackbarMessages.tryEmit("Đăng nhập Google Drive chưa hoàn tất. Vui lòng thử lại.")
+                val errDetail = container.authManager.authStateFlow.value.lastErrorMessage
+                snackbarMessages.tryEmit(
+                    if (!errDetail.isNullOrBlank()) {
+                        "Lỗi đăng nhập Google Drive: $errDetail"
+                    } else {
+                        "Đăng nhập Google Drive chưa hoàn tất. Vui lòng thử lại."
+                    },
+                )
             }
         }
     }
@@ -184,20 +192,36 @@ class MainActivity : ComponentActivity() {
         val authIntent = container.authManager.buildAuthIntent()
         if (authIntent == null) {
             snackbarMessages.tryEmit(
-                "Chưa cấu hình GOOGLE_OAUTH_CLIENT_ID. Xem hướng dẫn trong SETUP_ANDROID.md.",
+                "Google Drive chưa có GOOGLE_OAUTH_CLIENT_ID khi build APK. Vào Cài đặt → Google Drive để xem hướng dẫn.",
             )
             return
         }
-        driveAuthLauncher.launch(authIntent)
+        runCatching {
+            driveAuthLauncher.launch(authIntent)
+        }.onFailure { err ->
+            snackbarMessages.tryEmit(
+                "Không mở được trình duyệt đăng nhập Google Drive: ${err.message ?: "chưa có trình duyệt mặc định"}",
+            )
+        }
     }
 
     private fun hasPermission(permission: String): Boolean =
         ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 }
 
-internal fun syncOutcomeMessage(outcome: SyncOutcome): String = when (outcome) {
+internal fun syncOutcomeMessage(
+    outcome: SyncOutcome,
+    authStatus: DriveAuthStatus? = null,
+): String = when (outcome) {
     SyncOutcome.COMPLETED -> "Đồng bộ Google Drive hoàn tất."
     SyncOutcome.PAUSED_NO_WIFI -> "Đang tạm dừng: cần kết nối Wi-Fi không giới hạn."
-    SyncOutcome.NEEDS_REAUTH -> "Phiên Google Drive đã hết hạn, vui lòng đăng nhập lại."
+    SyncOutcome.NEEDS_REAUTH -> when {
+        authStatus != null && !authStatus.isOAuthConfigured ->
+            "Chưa cấu hình GOOGLE_OAUTH_CLIENT_ID cho Google Drive khi build APK."
+        authStatus != null && !authStatus.needsReauth && !authStatus.isSignedIn ->
+            "Bạn chưa đăng nhập Google Drive. Hãy vào Cài đặt → Đăng nhập Google Drive."
+        else ->
+            "Phiên Google Drive đã hết hạn, vui lòng đăng nhập lại."
+    }
     SyncOutcome.RETRYABLE_ERROR -> "Lỗi mạng tạm thời, sẽ thử lại khi Wi-Fi ổn định."
 }

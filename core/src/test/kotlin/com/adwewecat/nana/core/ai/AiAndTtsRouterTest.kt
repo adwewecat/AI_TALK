@@ -619,6 +619,45 @@ class AiAndTtsRouterTest {
     }
 
     @Test
+    fun personaPromptBuilderAndRouterInjectVietnamUtcPlus7DateTime() = runTest {
+        // 2026-11-21T23:54:00Z == Sunday 2026-11-22 06:54 in Asia/Ho_Chi_Minh (UTC+7).
+        val fixedEpochMs = java.time.Instant.parse("2026-11-21T23:54:00Z").toEpochMilli()
+        val prompt = PersonaPromptBuilder.buildSystemPrompt(
+            persona = PersonaMode.NANA,
+            memories = emptyList(),
+            nowMs = fixedEpochMs,
+        )
+        assertTrue("Expected UTC+7 marker in prompt: $prompt", prompt.contains("UTC+7"))
+        assertTrue("Expected 06:54 Vietnam time in prompt: $prompt", prompt.contains("06:54"))
+        assertTrue("Expected 22/11/2026 Vietnam date in prompt: $prompt", prompt.contains("22/11/2026"))
+        assertTrue("Expected Chủ Nhật in prompt: $prompt", prompt.contains("Chủ Nhật"))
+
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody("""{"candidates":[{"content":{"parts":[{"text":"Dạ bây giờ là 6 giờ 54 phút sáng rồi anh ơi!"}]}}]}"""),
+        )
+        val keyPool = KeyPoolManager(initialKeys = listOf(paidGeminiKey(id = "gem-time", priority = 1)))
+        val stateMachine = NaNaQuotaStateMachine(keyPool)
+        val router = AiChatRouter(
+            keyPool = keyPool,
+            stateMachine = stateMachine,
+            geminiClient = geminiClient,
+            openAiClient = openAiClient,
+            claudeClient = claudeClient,
+            clockMs = { fixedEpochMs },
+        )
+
+        router.sendTurn(emptyList(), emptyList(), "Mấy giờ rồi em?")
+        val req = server.takeRequest()
+        val payload = json.parseToJsonElement(req.body.readUtf8()).jsonObject
+        val sysText = payload["systemInstruction"]!!.jsonObject["parts"]!!
+            .jsonArray[0].jsonObject["text"]!!.jsonPrimitive.content
+        assertTrue("Router must inject UTC+7 time into systemInstruction", sysText.contains("06:54"))
+        assertTrue("Router must inject UTC+7 date into systemInstruction", sysText.contains("22/11/2026"))
+    }
+
+    @Test
     fun memoryExtractorGuardsNonFiniteConfidenceValues() {
         val extractor = MemoryExtractor()
         val raw = """

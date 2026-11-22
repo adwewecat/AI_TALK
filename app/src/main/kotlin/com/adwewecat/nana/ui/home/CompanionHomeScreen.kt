@@ -130,7 +130,13 @@ fun CompanionHomeScreen(
                 authStatus = authStatus,
                 isSyncing = isSyncing,
                 lastSyncOutcome = lastSyncOutcome,
-                onClick = onSyncNow,
+                onClick = {
+                    if (authStatus.isSignedIn) {
+                        onSyncNow()
+                    } else {
+                        onSignInDrive()
+                    }
+                },
             )
         }
 
@@ -483,6 +489,7 @@ private fun WifiSyncPill(
 ) {
     val (icon, text, tint) = when {
         isSyncing -> Triple(Icons.Rounded.CloudSync, "Đang đồng bộ Wi-Fi...", NaNaPalette.SakuraPink)
+        !authStatus.isOAuthConfigured -> Triple(Icons.Rounded.WifiOff, "Drive chưa cấu hình", NaNaPalette.TextSecondary)
         authStatus.needsReauth -> Triple(Icons.Rounded.Warning, "Cần đăng nhập Drive", NaNaPalette.CoralError)
         !authStatus.isSignedIn -> Triple(Icons.Rounded.WifiOff, "Chưa liên kết Drive", NaNaPalette.TextSecondary)
         lastSyncOutcome == SyncOutcome.PAUSED_NO_WIFI -> Triple(Icons.Rounded.WifiOff, "Chờ Wi-Fi", NaNaPalette.AmberCooldown)
@@ -588,7 +595,7 @@ private fun loopStateLabel(loopState: VoiceLoopState, persona: PersonaMode): Str
 }
 
 private val TIME_FORMATTER: DateTimeFormatter =
-    DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault())
+    DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.of("Asia/Ho_Chi_Minh"))
 
 private fun formatShortTime(epochMs: Long): String =
     runCatching { TIME_FORMATTER.format(Instant.ofEpochMilli(epochMs)) }.getOrDefault("")

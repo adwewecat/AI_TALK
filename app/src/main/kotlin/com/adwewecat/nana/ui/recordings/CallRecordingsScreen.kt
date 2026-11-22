@@ -437,7 +437,7 @@ private data class Quadruple<A, B, C, D>(
 )
 
 private val RECORDING_DATE_FORMATTER: DateTimeFormatter =
-    DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm").withZone(ZoneId.systemDefault())
+    DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm").withZone(ZoneId.of("Asia/Ho_Chi_Minh"))
 
 private fun formatRecordingDate(epochMs: Long): String =
     runCatching { RECORDING_DATE_FORMATTER.format(Instant.ofEpochMilli(epochMs)) }.getOrDefault("")

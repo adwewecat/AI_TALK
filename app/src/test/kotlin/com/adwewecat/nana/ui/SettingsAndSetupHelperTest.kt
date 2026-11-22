@@ -420,4 +420,39 @@ class SettingsAndSetupHelperTest {
         )
         assertEquals(1, vault.loadKeys().size)
     }
+
+    @Test(timeout = 15_000)
+    fun syncOutcomeMessageDistinguishesUnconfiguredNotSignedInAndExpiredDriveSessions() {
+        val unconfigured = com.adwewecat.nana.syncOutcomeMessage(
+            outcome = SyncOutcome.NEEDS_REAUTH,
+            authStatus = com.adwewecat.nana.data.auth.DriveAuthStatus(
+                isSignedIn = false,
+                needsReauth = false,
+                isOAuthConfigured = false,
+            ),
+        )
+        assertTrue("Unconfigured OAuth must mention client ID: $unconfigured", unconfigured.contains("GOOGLE_OAUTH_CLIENT_ID"))
+        assertFalse("Unconfigured OAuth must NOT say expired: $unconfigured", unconfigured.contains("hết hạn"))
+
+        val notSignedIn = com.adwewecat.nana.syncOutcomeMessage(
+            outcome = SyncOutcome.NEEDS_REAUTH,
+            authStatus = com.adwewecat.nana.data.auth.DriveAuthStatus(
+                isSignedIn = false,
+                needsReauth = false,
+                isOAuthConfigured = true,
+            ),
+        )
+        assertTrue("Not signed in must prompt sign-in: $notSignedIn", notSignedIn.contains("chưa đăng nhập", ignoreCase = true))
+        assertFalse("Not signed in must NOT say expired: $notSignedIn", notSignedIn.contains("hết hạn"))
+
+        val expired = com.adwewecat.nana.syncOutcomeMessage(
+            outcome = SyncOutcome.NEEDS_REAUTH,
+            authStatus = com.adwewecat.nana.data.auth.DriveAuthStatus(
+                isSignedIn = false,
+                needsReauth = true,
+                isOAuthConfigured = true,
+            ),
+        )
+        assertTrue("Truly expired token must mention expired: $expired", expired.contains("hết hạn"))
+    }
 }

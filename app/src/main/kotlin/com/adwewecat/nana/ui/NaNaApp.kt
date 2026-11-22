@@ -94,8 +94,19 @@ fun NaNaApp(
 
     val runWifiSyncWithFeedback: () -> Unit = {
         scope.launch {
+            val currentAuth = container.authManager.authStateFlow.value
+            if (!currentAuth.isOAuthConfigured) {
+                snackbarHostState.showSnackbar(syncOutcomeMessage(com.adwewecat.nana.core.sync.SyncOutcome.NEEDS_REAUTH, currentAuth))
+                return@launch
+            }
+            if (!currentAuth.isSignedIn) {
+                onSignInDrive()
+                return@launch
+            }
             val outcome = container.runManualWifiSync()
-            snackbarHostState.showSnackbar(syncOutcomeMessage(outcome))
+            snackbarHostState.showSnackbar(
+                syncOutcomeMessage(outcome, container.authManager.authStateFlow.value),
+            )
         }
     }
 
@@ -251,7 +262,7 @@ fun NaNaApp(
                                 if (outcome == com.adwewecat.nana.core.sync.SyncOutcome.COMPLETED) {
                                     "Đã khôi phục dữ liệu từ Google Drive (nếu có)."
                                 } else {
-                                    syncOutcomeMessage(outcome)
+                                    syncOutcomeMessage(outcome, container.authManager.authStateFlow.value)
                                 },
                             )
                         }

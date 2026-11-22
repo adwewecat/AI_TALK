@@ -377,7 +377,7 @@ fun SettingsScreen(
                 Text(
                     text = when {
                         !authStatus.isOAuthConfigured ->
-                            "OAuth chưa cấu hình (thiếu GOOGLE_OAUTH_CLIENT_ID khi build APK)."
+                            "Chưa gắn Google OAuth Client ID khi build APK (cần tạo Android OAuth Client ID cho gói com.adwewecat.nana và điền GOOGLE_OAUTH_CLIENT_ID vào local.properties rồi build lại)."
                         authStatus.needsReauth ->
                             "Phiên đăng nhập Google Drive đã hết hạn (${authStatus.email ?: "cần xác thực lại"})."
                         authStatus.isSignedIn ->
@@ -388,6 +388,14 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (authStatus.needsReauth) NaNaPalette.CoralError else MaterialTheme.colorScheme.onSurface,
                 )
+                authStatus.lastErrorMessage?.takeIf { it.isNotBlank() }?.let { err ->
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Chi tiết lỗi: $err",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = NaNaPalette.CoralError,
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
