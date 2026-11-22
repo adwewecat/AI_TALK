@@ -10,7 +10,7 @@ import com.adwewecat.nana.core.model.KeyStatus
 class KeyPoolManager(
     initialKeys: List<ApiKeyEntry>,
     private val clockMs: () -> Long = { System.currentTimeMillis() },
-    private val defaultCooldownMs: Long = 3_600_000L,
+    private val defaultCooldownMs: Long = 60_000L,
 ) {
     private val lock = Any()
     private var keys: List<ApiKeyEntry> = initialKeys.sortedBy { it.priority }

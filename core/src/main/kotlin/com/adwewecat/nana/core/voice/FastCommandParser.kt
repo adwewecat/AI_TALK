@@ -38,15 +38,20 @@ object FastCommandParser {
         listOf(
             "tat na na",
             "tat nana",
+            "tat di",
+            "tat ung dung",
             "ngung nghe",
             "dung nghe",
             "nghi thoi",
+            "nghi di",
+            "thoi nghi di",
             "ket thuc",
             "tam biet",
             "nghi nhe",
             "thoi nha",
             "dung lai",
             "im di",
+            "im lang",
         ) to DeviceCommand.StopSession,
     )
 

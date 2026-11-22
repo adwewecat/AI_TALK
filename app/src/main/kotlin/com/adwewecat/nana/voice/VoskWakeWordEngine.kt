@@ -79,12 +79,14 @@ class VoskWakeWordEngine(
             recognizer = Recognizer(model, BuiltInMicAudioInput.SAMPLE_RATE_HZ.toFloat(), WAKE_GRAMMAR_JSON)
 
             val vad = EnergyVad(
-                speechRmsThreshold = 140.0,
+                speechRmsThreshold = 240.0,
                 silenceDurationMs = 900L,
                 maxUtteranceMs = 4_000L,
             )
             val buffer = ShortArray(FRAME_SAMPLES)
             var preRollFrame: ShortArray? = null
+            var speechFrameCount = 0
+            var peakRms = 0.0
             var lastWakeAtMs = 0L
 
             // Self-healing loop: if another app (phone call, Zalo, camera) temporarily claims the mic,
@@ -132,30 +134,47 @@ class VoskWakeWordEngine(
 
                         if (vadEvent == VadEvent.IDLE) {
                             preRollFrame = frame
+                            speechFrameCount = 0
+                            peakRms = 0.0
                             continue
                         }
 
-                        if (vadEvent == VadEvent.SPEECH_STARTED && preRollFrame != null) {
-                            recognizer.acceptWaveForm(preRollFrame, preRollFrame.size)
-                            preRollFrame = null
+                        if (vadEvent == VadEvent.SPEECH_STARTED) {
+                            speechFrameCount = 1
+                            peakRms = rms
+                            if (preRollFrame != null) {
+                                recognizer.acceptWaveForm(preRollFrame, preRollFrame.size)
+                                preRollFrame = null
+                            }
+                        } else {
+                            if (rms >= 240.0) {
+                                speechFrameCount++
+                            }
+                            if (rms > peakRms) {
+                                peakRms = rms
+                            }
                         }
 
                         val isFinalized = recognizer.acceptWaveForm(frame, readCount)
-                        val transcript = extractTranscript(
-                            if (isFinalized) recognizer.result else recognizer.partialResult,
-                        )
-
-                        val wakeDetected = if (transcript != null && FastCommandParser.matchesWakeWord(transcript)) {
-                            true
+                        // Trigger ONLY on finalized speech endpoints or complete utterances with real vocal energy.
+                        // NEVER trigger on transient partial hypotheses to prevent phantom wake-ups from ambient noise or room voices.
+                        val wakeDetected = if (isFinalized) {
+                            val transcript = extractTranscript(recognizer.result)
+                            recognizer.reset()
+                            speechFrameCount >= 2 && peakRms >= 280.0 &&
+                                transcript != null && FastCommandParser.matchesWakeWord(transcript)
                         } else if (vadEvent == VadEvent.UTTERANCE_COMPLETE) {
                             val finalText = extractTranscript(recognizer.finalResult)
                             recognizer.reset()
-                            finalText != null && FastCommandParser.matchesWakeWord(finalText)
+                            speechFrameCount >= 2 && peakRms >= 280.0 &&
+                                finalText != null && FastCommandParser.matchesWakeWord(finalText)
                         } else {
                             false
                         }
 
                         if (wakeDetected) {
+                            speechFrameCount = 0
+                            peakRms = 0.0
                             val nowMs = System.currentTimeMillis()
                             if (nowMs - lastWakeAtMs >= WAKE_COOLDOWN_MS) {
                                 lastWakeAtMs = nowMs
@@ -222,9 +241,9 @@ class VoskWakeWordEngine(
         private const val WAKE_GRAMMAR_JSON =
             """["na na", "nana", "na na ơi", "nana ơi", "na nà", "na ná", "nà na", "ná na", "ơi na na", "[unk]"]"""
         private const val CONSENT_GRAMMAR_JSON =
-            """["ok", "ô kê", "ừ", "có", "được", "đồng ý", "không", "thôi", "[unk]"]"""
+            """["ok", "ô kê", "ừ", "có", "được", "đồng ý", "không", "thôi", "tắt na na", "tắt nana", "tắt đi", "nghỉ thôi", "nghỉ đi", "dừng lại", "tạm biệt", "[unk]"]"""
         private const val LOCAL_COMMAND_GRAMMAR_JSON =
-            """["tắt na na", "tắt nana", "ngưng nghe", "dừng nghe", "nghỉ thôi", "kết thúc", "tạm biệt", "nghỉ nhé", "dừng lại", "bắt máy", "nghe máy", "cúp máy", "tắt cuộc gọi", "bật loa ngoài", "tắt loa ngoài", "bật đèn pin", "tắt đèn pin", "[unk]"]"""
+            """["tắt na na", "tắt nana", "tắt đi", "tắt ứng dụng", "ngưng nghe", "dừng nghe", "nghỉ thôi", "nghỉ đi", "thôi nghỉ đi", "kết thúc", "tạm biệt", "nghỉ nhé", "dừng lại", "thôi", "bắt máy", "nghe máy", "cúp máy", "tắt cuộc gọi", "bật loa ngoài", "tắt loa ngoài", "bật đèn pin", "tắt đèn pin", "[unk]"]"""
 
         private val json = Json { ignoreUnknownKeys = true }
 

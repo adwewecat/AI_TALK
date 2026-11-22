@@ -40,7 +40,7 @@ fun readLocalOrEnv(name: String, defaultValue: String = ""): String =
 
 val seedGeminiPrimary = readLocalOrEnv("NANA_SEED_GEMINI_PRIMARY")
 val seedGeminiBackup = readLocalOrEnv("NANA_SEED_GEMINI_BACKUP")
-val seedGeminiPrimaryModel = readLocalOrEnv("NANA_SEED_GEMINI_PRIMARY_MODEL", "gemini-3-flash-preview")
+val seedGeminiPrimaryModel = readLocalOrEnv("NANA_SEED_GEMINI_PRIMARY_MODEL", "gemini-3.5-flash")
 val seedGeminiBackupModel = readLocalOrEnv("NANA_SEED_GEMINI_BACKUP_MODEL", "gemini-3.5-flash-lite")
 
 android {

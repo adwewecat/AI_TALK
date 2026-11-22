@@ -28,7 +28,7 @@ object LocalSeedKeyBootstrapper {
             return
         }
 
-        val resolvedPrimaryModel = primaryModelId.trim().ifEmpty { "gemini-3-flash-preview" }
+        val resolvedPrimaryModel = primaryModelId.trim().ifEmpty { "gemini-3.5-flash" }
         val resolvedBackupModel = backupModelId.trim().ifEmpty { "gemini-3.5-flash-lite" }
         val bundleFingerprint = sha256("$cleanPrimary|$cleanBackup|$resolvedPrimaryModel|$resolvedBackupModel")
         if (vault.loadSeedBundleFingerprint() == bundleFingerprint) {

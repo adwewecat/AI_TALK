@@ -344,13 +344,14 @@ class SettingsAndSetupHelperTest {
 
     @Test(timeout = 15_000)
     fun modelCatalogDefaultsToGemini38AndExposesGemini4And36And38Models() {
-        assertEquals("gemini-3.8-flash", ModelCatalog.defaultModelFor(ProviderType.GEMINI_VERTEX_EXPRESS))
-        assertEquals("gemini-3.8-flash", ModelCatalog.defaultModelFor(ProviderType.GEMINI_AI_STUDIO))
-        assertEquals("gemini-3.6-flash", ModelCatalog.defaultModelFor(ProviderType.FREE_GEMINI))
+        assertEquals("gemini-3.5-flash", ModelCatalog.defaultModelFor(ProviderType.GEMINI_VERTEX_EXPRESS))
+        assertEquals("gemini-3.5-flash", ModelCatalog.defaultModelFor(ProviderType.GEMINI_AI_STUDIO))
+        assertEquals("gemini-3.5-flash-lite", ModelCatalog.defaultModelFor(ProviderType.FREE_GEMINI))
 
         val geminiModels = ModelCatalog.suggestedModelsFor(ProviderType.GEMINI_VERTEX_EXPRESS, isTtsOnly = false)
             .map { it.modelId }
         assertTrue(geminiModels.containsAll(listOf(
+            "gemini-3.5-flash",
             "gemini-3.5-flash-lite",
             "gemini-3-flash-preview",
             "gemini-3.8-flash",

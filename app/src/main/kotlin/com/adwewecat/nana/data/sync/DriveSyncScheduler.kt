@@ -30,11 +30,13 @@ class DriveSyncScheduler(
 
     /** Enqueues a unique one-time Wi-Fi sync request using [ExistingWorkPolicy.KEEP]. */
     fun enqueueSync() {
-        WorkManager.getInstance(appContext).enqueueUniqueWork(
-            UNIQUE_ONE_TIME_WORK_NAME,
-            ExistingWorkPolicy.KEEP,
-            buildOneTimeSyncRequest(),
-        )
+        runCatching {
+            WorkManager.getInstance(appContext).enqueueUniqueWork(
+                UNIQUE_ONE_TIME_WORK_NAME,
+                ExistingWorkPolicy.KEEP,
+                buildOneTimeSyncRequest(),
+            )
+        }
     }
 
     /** Builds a 30-minute periodic [DriveSyncWorker] request requiring [NetworkType.UNMETERED]. */
@@ -46,11 +48,13 @@ class DriveSyncScheduler(
 
     /** Registers the periodic 30-minute unmetered Wi-Fi Drive backup job. */
     fun schedulePeriodicWifiSync() {
-        WorkManager.getInstance(appContext).enqueueUniquePeriodicWork(
-            UNIQUE_PERIODIC_WORK_NAME,
-            ExistingPeriodicWorkPolicy.KEEP,
-            buildPeriodicSyncRequest(),
-        )
+        runCatching {
+            WorkManager.getInstance(appContext).enqueueUniquePeriodicWork(
+                UNIQUE_PERIODIC_WORK_NAME,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                buildPeriodicSyncRequest(),
+            )
+        }
     }
 
     private fun unmeteredConstraints(): Constraints = Constraints.Builder()

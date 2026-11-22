@@ -202,7 +202,7 @@ class NaNaQuotaStateMachineTest {
 
     @Test
     fun negativeOrAmbiguousDeclinesSafely() {
-        val negativeInputs = listOf("không", "thôi", "không ok", "không đâu")
+        val negativeInputs = listOf("không", "thôi", "không ok", "không đâu", "tắt Na Na", "nghỉ thôi", "dừng lại", "tạm biệt")
         negativeInputs.forEach { utterance ->
             assertEquals(
                 "Expected NEGATIVE for '$utterance'",

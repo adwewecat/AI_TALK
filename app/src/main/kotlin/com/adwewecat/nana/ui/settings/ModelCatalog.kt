@@ -15,10 +15,11 @@ data class ModelOption(
 object ModelCatalog {
 
     private val GEMINI_PRO_MODELS = listOf(
-        ModelOption("gemini-3-flash-preview", "3 Flash · Ổn định"),
+        ModelOption("gemini-3.5-flash", "3.5 Flash · Khuyên dùng"),
         ModelOption("gemini-3.5-flash-lite", "3.5 Flash Lite · Siêu nhanh"),
         ModelOption("gemini-3.8-flash", "3.8 Flash"),
         ModelOption("gemini-3.6-flash", "3.6 Flash"),
+        ModelOption("gemini-3-flash-preview", "3 Flash · Xem trước"),
         ModelOption("gemini-3.7-flash", "3.7 Flash"),
         ModelOption("gemini-3.1-flash-lite", "3.1 Flash Lite"),
         ModelOption("gemini-4-neon", "4 Neon"),
@@ -71,9 +72,9 @@ object ModelCatalog {
         return when (provider) {
             ProviderType.GEMINI_VERTEX_EXPRESS,
             ProviderType.GEMINI_AI_STUDIO,
-            -> "gemini-3.8-flash"
+            -> "gemini-3.5-flash"
 
-            ProviderType.FREE_GEMINI -> "gemini-3.6-flash"
+            ProviderType.FREE_GEMINI -> "gemini-3.5-flash-lite"
             ProviderType.CLAUDE -> "claude-sonnet-4-5"
             ProviderType.OPENAI,
             ProviderType.FREE_OPENAI_COMPAT,
