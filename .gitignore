@@ -16,6 +16,7 @@
 app/build/
 core/build/
 local.properties
+app/src/main/assets/vosk-model-vn/
 *.jks
 .cxx/
 captures/

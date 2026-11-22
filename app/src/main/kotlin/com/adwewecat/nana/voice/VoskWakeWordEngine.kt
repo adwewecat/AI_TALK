@@ -85,7 +85,7 @@ class VoskWakeWordEngine(
             }
 
             val vad = EnergyVad(
-                speechRmsThreshold = 550.0,
+                speechRmsThreshold = 140.0,
                 silenceDurationMs = 900L,
                 maxUtteranceMs = 4_000L,
             )
@@ -169,7 +169,8 @@ class VoskWakeWordEngine(
         private const val FRAME_SAMPLES = 1_600
         private const val STOP_JOIN_TIMEOUT_MS = 300L
         private const val WAKE_COOLDOWN_MS = 1_500L
-        private const val WAKE_GRAMMAR_JSON = """["na na", "nana", "na nà", "na ná", "[unk]"]"""
+        private const val WAKE_GRAMMAR_JSON =
+            """["na na", "nana", "na na ơi", "nana ơi", "na nà", "na ná", "nà na", "ná na", "ơi na na", "[unk]"]"""
         private const val CONSENT_GRAMMAR_JSON =
             """["ok", "ô kê", "ừ", "có", "được", "đồng ý", "không", "thôi", "[unk]"]"""
         private const val LOCAL_COMMAND_GRAMMAR_JSON =

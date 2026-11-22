@@ -8,6 +8,7 @@ import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
@@ -51,7 +52,7 @@ class AndroidAudioPlayer(
             val audioTrack = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build(),
                 )
@@ -81,6 +82,21 @@ class AndroidAudioPlayer(
                         break
                     }
                     offset += written
+                }
+
+                // Wait for the AudioTrack hardware buffer to finish draining before stop()/release(),
+                // otherwise short replies (<= buffer size) get cut off before a single syllable plays.
+                val totalFrames = offset / BYTES_PER_MONO_16BIT_FRAME
+                if (totalFrames > 0 && currentCoroutineContext().isActive) {
+                    val expectedDurationMs = (totalFrames * 1_000L) / sampleRateHz
+                    val deadlineMs = System.currentTimeMillis() + expectedDurationMs + DRAIN_GRACE_MS
+                    while (currentCoroutineContext().isActive && System.currentTimeMillis() < deadlineMs) {
+                        val playedFrames = runCatching { audioTrack.playbackHeadPosition }.getOrDefault(totalFrames)
+                        if (playedFrames >= totalFrames) {
+                            break
+                        }
+                        delay(DRAIN_POLL_INTERVAL_MS)
+                    }
                 }
             } finally {
                 runCatching {
@@ -127,7 +143,10 @@ class AndroidAudioPlayer(
         const val DEFAULT_SAMPLE_RATE_HZ = 24_000
         const val TIRED_PROMPT_CACHE_FILE = "tired_consent_prompt.pcm"
         private const val DEFAULT_MIN_BUFFER_BYTES = 4_096
-        private const val MAX_STREAM_BUFFER_BYTES = 65_536
+        private const val MAX_STREAM_BUFFER_BYTES = 16_384
         private const val WRITE_CHUNK_BYTES = 4_096
+        private const val BYTES_PER_MONO_16BIT_FRAME = 2
+        private const val DRAIN_POLL_INTERVAL_MS = 35L
+        private const val DRAIN_GRACE_MS = 450L
     }
 }

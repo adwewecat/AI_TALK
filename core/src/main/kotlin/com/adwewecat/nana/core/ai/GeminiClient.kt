@@ -70,17 +70,13 @@ class GeminiClient(
             return TtsResult.Error("Empty text for TTS")
         }
 
-        val promptText = if (styleInstruction.isNotBlank()) {
-            "${styleInstruction.trim()}\n$sanitizedText"
-        } else {
-            sanitizedText
-        }
+        // Send only pure spoken text: Gemini 3.8 TTS reads any prepended style prompt verbatim aloud.
         val payload = buildJsonObject {
             putJsonArray("contents") {
                 addJsonObject {
                     put("role", "user")
                     putJsonArray("parts") {
-                        addJsonObject { put("text", promptText) }
+                        addJsonObject { put("text", sanitizedText) }
                     }
                 }
             }
@@ -289,12 +285,22 @@ class GeminiClient(
         }
 
         val parts = parsed.candidates.firstOrNull()?.content?.parts.orEmpty()
-        val textSegments = mutableListOf<String>()
+        val textBuilder = StringBuilder()
         val commands = mutableListOf<DeviceCommand>()
 
         parts.forEach { part ->
             if (!part.thought) {
-                part.text?.trim()?.takeIf { it.isNotEmpty() }?.let(textSegments::add)
+                val rawText = part.text
+                if (!rawText.isNullOrEmpty()) {
+                    if (textBuilder.isNotEmpty() &&
+                        !textBuilder.last().isWhitespace() &&
+                        !rawText.first().isWhitespace() &&
+                        rawText.first() !in ",.;:!?)"
+                    ) {
+                        textBuilder.append(' ')
+                    }
+                    textBuilder.append(rawText)
+                }
             }
             part.functionCall?.let { call ->
                 ToolSchemaParser.parseCommand(
@@ -305,7 +311,7 @@ class GeminiClient(
         }
 
         return LlmResult.Success(
-            replyText = textSegments.joinToString("\n"),
+            replyText = textBuilder.toString().trim(),
             toolCalls = commands,
         )
     }

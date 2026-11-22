@@ -261,7 +261,38 @@ class VietnameseWebTtsTest {
         assertEquals(24_000, audio.sampleRateHz)
 
         assertEquals("/v1/publishers/google/models/gemini-3.8-flash-tts:generateContent", server.takeRequest().path)
-        assertEquals("/v1beta/models/gemini-3.8-flash-tts:generateContent", server.takeRequest().path)
+        val aiStudioReq = server.takeRequest()
+        assertEquals("/v1beta/models/gemini-3.8-flash-tts:generateContent", aiStudioReq.path)
+        val sentBody = aiStudioReq.body.readUtf8()
+        assertTrue("Expected spoken text in TTS payload", sentBody.contains("Chào anh nha!"))
+        assertFalse("Style instruction must NOT be spoken verbatim in TTS payload", sentBody.contains("Dễ thương"))
+    }
+
+    @Test
+    fun geminiConcatenatesSplitTextPartsNaturallyWithoutBrokenPunctuation() = runTest {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody(
+                    """{"candidates":[{"content":{"parts":[{"text":"Chào anh"},{"text":", em là Na Na nè!"}]}}]}""",
+                ),
+        )
+
+        val baseUrl = server.url("/").toString().trimEnd('/')
+        val client = GeminiClient(httpClient = OkHttpClient(), vertexBaseUrl = baseUrl, aiStudioBaseUrl = baseUrl)
+        val key = ApiKeyEntry(
+            id = "gem-split",
+            label = "Gemini 3.5",
+            provider = ProviderType.GEMINI_AI_STUDIO,
+            apiKey = "AQ.synthetic-split-parts",
+            modelId = "gemini-3.5-flash-lite",
+            priority = 1,
+            isFreeTier = false,
+        )
+
+        val res = client.generate(key, LlmRequest("Na Na", emptyList(), "Chào em", enableTools = false))
+        assertTrue(res is LlmResult.Success)
+        assertEquals("Chào anh, em là Na Na nè!", (res as LlmResult.Success).replyText)
     }
 
     @Test

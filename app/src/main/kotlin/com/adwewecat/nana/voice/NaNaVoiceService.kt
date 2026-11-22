@@ -8,7 +8,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.ToneGenerator
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -35,6 +37,7 @@ import com.adwewecat.nana.data.local.EncryptedApiKeyVault
 import com.adwewecat.nana.data.local.NaNaDatabase
 import com.adwewecat.nana.data.sync.DriveSyncScheduler
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -77,11 +80,14 @@ class NaNaVoiceService : Service() {
     private var activeLoopJob: Job? = null
     private var uiObserverJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private val finishCaptureRequested = AtomicBoolean(false)
+    private val pauseForTextChatRequested = AtomicBoolean(false)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        activeInstance = this
         createNotificationChannel()
         val resolved = resolveRuntime()
         runtime = resolved
@@ -103,6 +109,7 @@ class NaNaVoiceService : Service() {
         }
 
         if (!startForegroundWithMicType(currentRuntime.orchestrator.uiState.value.statusMessage)) {
+            currentRuntime.orchestrator.reportStatus("Không thể bật dịch vụ Micro — hãy cấp quyền Micro cho Na Na.")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -123,7 +130,12 @@ class NaNaVoiceService : Service() {
     }
 
     override fun onDestroy() {
+        if (activeInstance === this) {
+            activeInstance = null
+        }
         _isRunning.value = false
+        finishCaptureRequested.set(false)
+        pauseForTextChatRequested.set(true)
         activeLoopJob?.cancel()
         uiObserverJob?.cancel()
         wakeWordEngine?.stop()
@@ -191,7 +203,17 @@ class NaNaVoiceService : Service() {
         if (currentRuntime.orchestrator.uiState.value.loopState != VoiceLoopState.IDLE_WAKE) {
             return
         }
-        wakeWordEngine?.start(
+        val engine = wakeWordEngine ?: return
+        if (!engine.isModelAvailable() && VoskModelInstaller.hasBundledAssets(this)) {
+            serviceScope.launch {
+                val installed = VoskModelInstaller.ensureInstalled(this@NaNaVoiceService)
+                if (installed && _isRunning.value) {
+                    ensurePassiveWakeWord(currentRuntime)
+                }
+            }
+            return
+        }
+        engine.start(
             onWakeDetected = {
                 serviceScope.launch {
                     if (_isRunning.value) {
@@ -206,7 +228,18 @@ class NaNaVoiceService : Service() {
     }
 
     private fun triggerPushToTalk(currentRuntime: NaNaVoiceRuntime) {
+        val currentLoopState = currentRuntime.orchestrator.uiState.value.loopState
+        // If already capturing speech, tapping Mic/Orb again finishes capture immediately and sends it!
+        if (activeLoopJob?.isActive == true &&
+            (currentLoopState == VoiceLoopState.LISTENING || currentLoopState == VoiceLoopState.AWAITING_CONSENT)
+        ) {
+            finishCaptureRequested.set(true)
+            return
+        }
+
         wakeWordEngine?.stop()
+        finishCaptureRequested.set(false)
+        pauseForTextChatRequested.set(false)
         val previousJob = activeLoopJob
         activeLoopJob = serviceScope.launch {
             previousJob?.cancelAndJoin()
@@ -217,6 +250,7 @@ class NaNaVoiceService : Service() {
                 }
                 currentRuntime.orchestrator.onWakeWordDetected()
             }
+            playListeningBeep()
             runActiveTurnLoop(currentRuntime)
         }
     }
@@ -226,9 +260,39 @@ class NaNaVoiceService : Service() {
             return
         }
         wakeWordEngine?.stop()
+        finishCaptureRequested.set(false)
+        pauseForTextChatRequested.set(false)
         activeLoopJob = serviceScope.launch {
             currentRuntime.orchestrator.onWakeWordDetected()
+            playListeningBeep()
             runActiveTurnLoop(currentRuntime)
+        }
+    }
+
+    private fun pauseCaptureForTextChatInternal() {
+        pauseForTextChatRequested.set(true)
+        finishCaptureRequested.set(false)
+        wakeWordEngine?.stop()
+        activeLoopJob?.cancel()
+        activeLoopJob = null
+    }
+
+    private fun notifyWakeModelReadyInternal() {
+        val currentRuntime = runtime ?: return
+        if (_isRunning.value && activeLoopJob?.isActive != true) {
+            ensurePassiveWakeWord(currentRuntime)
+        }
+    }
+
+    private fun playListeningBeep() {
+        if ("robolectric".equals(Build.FINGERPRINT, ignoreCase = true)) return
+        runCatching {
+            val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 65)
+            tone.startTone(ToneGenerator.TONE_PROP_BEEP, 75)
+            serviceScope.launch(Dispatchers.IO) {
+                kotlinx.coroutines.delay(180L)
+                runCatching { tone.release() }
+            }
         }
     }
 
@@ -241,17 +305,26 @@ class NaNaVoiceService : Service() {
                 break
             }
 
+            finishCaptureRequested.set(false)
+            pauseForTextChatRequested.set(false)
             val settings = currentRuntime.settingsProvider()
             val timeoutMs = settings.silenceTimeoutSec.coerceIn(5, 60) * 1_000L
-            val capturedPcm = captureSingleUtterancePcm(
+            val captureResult = captureSingleUtterancePcm(
                 maxWaitForSpeechMs = timeoutMs,
                 onMicLevel = { orchestrator.updateMicLevel(it) },
             )
 
-            if (!serviceScope.isActive || !_isRunning.value) {
+            if (!serviceScope.isActive || !_isRunning.value || pauseForTextChatRequested.get()) {
                 break
             }
 
+            if (captureResult.micOpenFailed) {
+                orchestrator.stopSession()
+                orchestrator.reportStatus("Không mở được micro — hãy kiểm tra quyền Micro cho Na Na.")
+                break
+            }
+
+            val capturedPcm = captureResult.pcmBytes
             if (capturedPcm == null || capturedPcm.isEmpty()) {
                 if (loopState == VoiceLoopState.AWAITING_CONSENT) {
                     orchestrator.onConsentTimeout()
@@ -282,33 +355,40 @@ class NaNaVoiceService : Service() {
         }
     }
 
+    private data class CaptureResult(
+        val pcmBytes: ByteArray?,
+        val micOpenFailed: Boolean = false,
+    )
+
     private suspend fun captureSingleUtterancePcm(
         maxWaitForSpeechMs: Long,
         onMicLevel: (Float) -> Unit,
-    ): ByteArray? = withContext(Dispatchers.IO) {
+    ): CaptureResult = withContext(Dispatchers.IO) {
         val audioRecord = BuiltInMicAudioInput.openBuiltInMicAudioRecord(this@NaNaVoiceService)
-            ?: return@withContext null
+            ?: return@withContext CaptureResult(pcmBytes = null, micOpenFailed = true)
 
         try {
             audioRecord.startRecording()
             if (audioRecord.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-                return@withContext null
+                return@withContext CaptureResult(pcmBytes = null, micOpenFailed = true)
             }
 
             val vad = EnergyVad(
-                speechRmsThreshold = 650.0,
-                silenceDurationMs = 1_400L,
-                maxUtteranceMs = 15_000L,
+                speechRmsThreshold = 180.0,
+                silenceDurationMs = 1_500L,
+                maxUtteranceMs = 20_000L,
             )
             val pcmBuffer = ByteArrayOutputStream()
+            val fallbackBuffer = ByteArrayOutputStream()
             val frame = ShortArray(CAPTURE_FRAME_SAMPLES)
             var speechStarted = false
             var idleElapsedMs = 0L
             var preRollBytes: ByteArray? = null
 
-            while (isActive) {
+            while (isActive && !pauseForTextChatRequested.get()) {
                 val readCount = audioRecord.read(frame, 0, frame.size)
                 if (readCount <= 0) {
+                    if (finishCaptureRequested.get()) break
                     continue
                 }
 
@@ -317,6 +397,9 @@ class NaNaVoiceService : Service() {
 
                 val frameDurationMs = (readCount * 1_000L) / BuiltInMicAudioInput.SAMPLE_RATE_HZ
                 val chunkBytes = BuiltInMicAudioInput.shortsToLittleEndianPcmBytes(frame, readCount)
+                if (fallbackBuffer.size() < MAX_FALLBACK_PCM_BYTES) {
+                    fallbackBuffer.write(chunkBytes)
+                }
 
                 when (vad.feedFrame(if (readCount == frame.size) frame else frame.copyOf(readCount), frameDurationMs)) {
                     VadEvent.IDLE -> {
@@ -324,7 +407,7 @@ class NaNaVoiceService : Service() {
                             preRollBytes = chunkBytes
                             idleElapsedMs += frameDurationMs
                             if (idleElapsedMs >= maxWaitForSpeechMs) {
-                                return@withContext null
+                                return@withContext CaptureResult(pcmBytes = null)
                             }
                         }
                     }
@@ -342,11 +425,25 @@ class NaNaVoiceService : Service() {
 
                     VadEvent.UTTERANCE_COMPLETE -> {
                         pcmBuffer.write(chunkBytes)
-                        return@withContext pcmBuffer.toByteArray()
+                        return@withContext CaptureResult(pcmBytes = pcmBuffer.toByteArray())
                     }
                 }
+
+                if (finishCaptureRequested.get()) {
+                    break
+                }
             }
-            if (speechStarted) pcmBuffer.toByteArray() else null
+
+            if (pauseForTextChatRequested.get()) {
+                return@withContext CaptureResult(pcmBytes = null)
+            }
+            val manualBytes = when {
+                speechStarted && pcmBuffer.size() > 0 -> pcmBuffer.toByteArray()
+                finishCaptureRequested.get() && fallbackBuffer.size() >= MIN_MANUAL_SEND_PCM_BYTES ->
+                    fallbackBuffer.toByteArray()
+                else -> null
+            }
+            CaptureResult(pcmBytes = manualBytes)
         } finally {
             onMicLevel(0f)
             runCatching {
@@ -526,10 +623,25 @@ class NaNaVoiceService : Service() {
         private const val REQUEST_PUSH_TO_TALK = 11
         private const val REQUEST_STOP = 12
         private const val CAPTURE_FRAME_SAMPLES = 1_600
+        private const val MAX_FALLBACK_PCM_BYTES = 16_000 * 2 * 15
+        private const val MIN_MANUAL_SEND_PCM_BYTES = 16_000 * 2 / 4
         private const val WAKE_LOCK_TAG = "NaNa:VoiceWakeLock"
         private const val WAKE_LOCK_TIMEOUT_MS = 30 * 60 * 1_000L
 
+        @Volatile
+        private var activeInstance: NaNaVoiceService? = null
+
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
+
+        /** Pauses active microphone capture so typed chat replies speak without audio focus conflict. */
+        fun pauseActiveCapture() {
+            activeInstance?.pauseCaptureForTextChatInternal()
+        }
+
+        /** Restarts passive wake-word listening after offline Vosk assets finish extracting. */
+        fun notifyWakeModelReady() {
+            activeInstance?.notifyWakeModelReadyInternal()
+        }
     }
 }

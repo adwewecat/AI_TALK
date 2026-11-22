@@ -56,6 +56,7 @@ import com.adwewecat.nana.voice.NaNaVoiceService
 import com.adwewecat.nana.voice.SyncTrigger
 import com.adwewecat.nana.voice.VietnameseFallbackTts
 import com.adwewecat.nana.voice.VoiceLoopState
+import com.adwewecat.nana.voice.VoskModelInstaller
 import com.adwewecat.nana.voice.VoskWakeWordEngine
 import java.io.File
 import java.util.UUID
@@ -66,6 +67,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -169,6 +171,9 @@ class AppContainer internal constructor(
     )
 
     val wakeWordEngine: VoskWakeWordEngine = VoskWakeWordEngine(appContext)
+
+    private val _wakeModelReady = MutableStateFlow(wakeWordEngine.isModelAvailable())
+    val wakeModelReady: StateFlow<Boolean> = _wakeModelReady.asStateFlow()
 
     val voiceOrchestrator: NaNaVoiceOrchestrator = NaNaVoiceOrchestrator(
         stateMachine = quotaStateMachine,
@@ -325,13 +330,45 @@ class AppContainer internal constructor(
         }
     }
 
+    /** Extracts bundled offline Vietnamese Vosk wake-word assets in background on app start. */
+    fun ensureWakeModelInstalledAsync() {
+        appScope.launch {
+            val installed = VoskModelInstaller.ensureInstalled(appContext)
+            _wakeModelReady.value = installed || wakeWordEngine.isModelAvailable()
+            if (_wakeModelReady.value) {
+                NaNaVoiceService.notifyWakeModelReady()
+            }
+        }
+    }
+
+    /** Launches [sendTextChat] on the application scope so tab switches never cancel Na Na's speech. */
+    fun sendTextChatAsync(text: String) {
+        appScope.launch {
+            sendTextChat(text)
+        }
+    }
+
+    /** Replays an existing assistant reply aloud on the application scope. */
+    fun replayMessageAsync(text: String, persona: PersonaMode) {
+        appScope.launch {
+            NaNaVoiceService.pauseActiveCapture()
+            voiceOrchestrator.speakMessageAloud(text, persona)
+            if (NaNaVoiceService.isRunning.value) {
+                NaNaVoiceService.notifyWakeModelReady()
+            }
+        }
+    }
+
     /** Sends a typed chat turn through [voiceOrchestrator] and refreshes key pool status. */
     suspend fun sendTextChat(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
+        NaNaVoiceService.pauseActiveCapture()
         voiceOrchestrator.onUserUtterance(transcript = trimmed, wavBytes = null)
         if (!NaNaVoiceService.isRunning.value) {
             voiceOrchestrator.stopSession()
+        } else {
+            NaNaVoiceService.notifyWakeModelReady()
         }
         refreshKeyPoolSnapshot()
     }

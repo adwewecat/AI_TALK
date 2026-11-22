@@ -11,9 +11,9 @@
   - Offline-first Room SQLite storage, Keystore-encrypted API key vault (`EncryptedSharedPreferences`), AppAuth PKCE Google Drive OAuth (`drive.file`), long-term companion memory extraction, and strict **Wi-Fi-only** (`NetworkType.UNMETERED` + `TRANSPORT_WIFI`/`INTERNET`/`NOT_METERED` + live `NetworkCallback` cancel) resumable Drive sync & reinstall restore.
 - **Key Directories:**
   - `core/src/main/kotlin/com/adwewecat/nana/core/` — Pure JVM library (`model/`, `quota/`, `ai/`, `voice/`, `sync/`).
-  - `core/src/test/kotlin/com/adwewecat/nana/core/` — Pure JVM & `MockWebServer` unit tests (52 tests).
+  - `core/src/test/kotlin/com/adwewecat/nana/core/` — Pure JVM & `MockWebServer` unit tests (53 tests).
   - `app/src/main/kotlin/com/adwewecat/nana/` — Android app (`data/`, `voice/`, `actions/`, `di/`, `ui/`, `NaNaApplication.kt`, `MainActivity.kt`).
-  - `app/src/test/kotlin/com/adwewecat/nana/` — Robolectric Android unit tests (34 tests).
+  - `app/src/test/kotlin/com/adwewecat/nana/` — Robolectric Android unit tests (35 tests).
   - `.github/workflows/android-build.yml` — CI test & debug APK build workflow.
   - `docs/superpowers/` — Approved design spec & 10-task TDD plan; `SETUP_ANDROID.md` — iQOO setup guide.
   - `.agents/skills/` — Installed `Skill_Workflow_A.I` suite (42 skills).
@@ -31,7 +31,7 @@
 # Run pure-JVM core tests (fast, < 5s)
 .\gradlew.bat :core:test --no-daemon
 
-# Run full unit test suite (:core + :app Robolectric, 86 tests)
+# Run full unit test suite (:core + :app Robolectric, 88 tests)
 .\gradlew.bat :core:test :app:testDebugUnitTest --no-daemon
 
 # Build debug APK (outputs app/build/outputs/apk/debug/app-debug.apk)

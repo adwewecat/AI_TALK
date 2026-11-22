@@ -129,4 +129,14 @@ class VietnameseFallbackTtsTest {
         assertEquals("Dạ em gái Na Na đây anh ơi!", systemCalls.first().first)
         assertEquals(PersonaMode.LITTLE_SISTER, systemCalls.first().second)
     }
+
+    @Test(timeout = 15_000)
+    fun builtInMicLevelScalesSensitivelyForNormalVoice() {
+        assertEquals(0f, BuiltInMicAudioInput.computeNormalizedMicLevel(0.0), 0.001f)
+        assertTrue(
+            "Normal speech RMS ~400 should register clearly on mic meter",
+            BuiltInMicAudioInput.computeNormalizedMicLevel(400.0) >= 0.19f,
+        )
+        assertEquals(1f, BuiltInMicAudioInput.computeNormalizedMicLevel(5_000.0), 0.001f)
+    }
 }

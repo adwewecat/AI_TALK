@@ -72,6 +72,7 @@ fun NaNaApp(
 
     val voiceState by container.voiceOrchestrator.uiState.collectAsState()
     val isServiceRunning by NaNaVoiceService.isRunning.collectAsState()
+    val isWakeModelAvailable by container.wakeModelReady.collectAsState()
     val authStatus by container.authManager.authStateFlow.collectAsState()
     val settings by container.settingsFlow.collectAsState()
     val apiKeys by container.keysFlow.collectAsState()
@@ -158,16 +159,15 @@ fun NaNaApp(
                 CompanionHomeScreen(
                     voiceState = voiceState,
                     isServiceRunning = isServiceRunning,
-                    isWakeModelAvailable = remember(resumeTick) { container.wakeWordEngine.isModelAvailable() },
+                    isWakeModelAvailable = isWakeModelAvailable,
                     authStatus = authStatus,
                     isSyncing = isSyncing,
                     lastSyncOutcome = lastSyncOutcome,
                     messages = messages,
                     onToggleService = onToggleVoiceService,
                     onPushToTalk = onPushToTalk,
-                    onSendText = { text ->
-                        scope.launch { container.sendTextChat(text) }
-                    },
+                    onSendText = { text -> container.sendTextChatAsync(text) },
+                    onReplayMessage = { msg -> container.replayMessageAsync(msg.content, msg.persona) },
                     onSyncNow = runWifiSyncWithFeedback,
                     onSignInDrive = onSignInDrive,
                 )

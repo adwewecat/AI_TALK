@@ -61,28 +61,15 @@ internal object BuiltInMicAudioInput {
         val safeMinBuf = if (minBufBytes > 0) minBufBytes else bufferSamples * 2
         val targetBufferBytes = maxOf(safeMinBuf, bufferSamples * 2)
 
-        val record = try {
-            AudioRecord.Builder()
-                .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
-                .setAudioFormat(
-                    AudioFormat.Builder()
-                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                        .setSampleRate(sampleRateHz)
-                        .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                        .build(),
-                )
-                .setBufferSizeInBytes(targetBufferBytes)
-                .build()
-        } catch (_: IllegalArgumentException) {
-            return null
-        } catch (_: UnsupportedOperationException) {
-            return null
-        }
-
-        if (record.state != AudioRecord.STATE_INITIALIZED) {
-            record.release()
-            return null
-        }
+        val record = createAudioRecord(
+            audioSource = MediaRecorder.AudioSource.MIC,
+            sampleRateHz = sampleRateHz,
+            bufferBytes = targetBufferBytes,
+        ) ?: createAudioRecord(
+            audioSource = MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            sampleRateHz = sampleRateHz,
+            bufferBytes = targetBufferBytes,
+        ) ?: return null
 
         // Route capture through phone's built-in mic to avoid triggering Bluetooth HFP/SCO.
         findBuiltInMic(context)?.let { builtInMic ->
@@ -91,8 +78,38 @@ internal object BuiltInMicAudioInput {
         return record
     }
 
+    @SuppressLint("MissingPermission")
+    private fun createAudioRecord(
+        audioSource: Int,
+        sampleRateHz: Int,
+        bufferBytes: Int,
+    ): AudioRecord? {
+        val candidate = try {
+            AudioRecord.Builder()
+                .setAudioSource(audioSource)
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(sampleRateHz)
+                        .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                        .build(),
+                )
+                .setBufferSizeInBytes(bufferBytes)
+                .build()
+        } catch (_: IllegalArgumentException) {
+            return null
+        } catch (_: UnsupportedOperationException) {
+            return null
+        }
+        if (candidate.state != AudioRecord.STATE_INITIALIZED) {
+            candidate.release()
+            return null
+        }
+        return candidate
+    }
+
     fun computeNormalizedMicLevel(rms: Double): Float =
-        (rms / 4_000.0).toFloat().coerceIn(0f, 1f)
+        (rms / 2_000.0).toFloat().coerceIn(0f, 1f)
 
     fun shortsToLittleEndianPcmBytes(samples: ShortArray, count: Int): ByteArray {
         val safeCount = count.coerceIn(0, samples.size)

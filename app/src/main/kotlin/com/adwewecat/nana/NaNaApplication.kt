@@ -27,6 +27,7 @@ class NaNaApplication :
 
         // Robolectric unit tests manage WorkManager and Telephony state explicitly.
         if (!"robolectric".equals(Build.FINGERPRINT, ignoreCase = true)) {
+            container.ensureWakeModelInstalledAsync()
             runCatching { container.syncScheduler.schedulePeriodicWifiSync() }
             runCatching { container.callStateMonitor.start() }
         }

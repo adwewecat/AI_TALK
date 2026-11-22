@@ -235,6 +235,37 @@ class NaNaVoiceOrchestrator(
         }
     }
 
+    /** Updates the user-visible status line (e.g., mic hardware warnings) without altering loop state. */
+    fun reportStatus(message: String) {
+        if (message.isBlank()) return
+        _uiState.update { it.copy(statusMessage = message) }
+    }
+
+    /** Replays an existing assistant reply aloud via [ttsRouter] without writing to chat history. */
+    suspend fun speakMessageAloud(text: String, persona: PersonaMode) = turnMutex.withLock {
+        val cleaned = text.trim()
+        if (cleaned.isEmpty()) return@withLock
+        val previous = _uiState.value
+        _uiState.update {
+            it.copy(
+                loopState = VoiceLoopState.SPEAKING,
+                activePersona = persona,
+                statusMessage = cleaned,
+            )
+        }
+        try {
+            speakViaTtsRouter(cleaned, persona)
+        } finally {
+            _uiState.update {
+                it.copy(
+                    loopState = if (previous.loopState == VoiceLoopState.SPEAKING) VoiceLoopState.IDLE_WAKE else previous.loopState,
+                    activePersona = stateMachine.activePersona,
+                    statusMessage = idleStatusMessage(stateMachine.state),
+                )
+            }
+        }
+    }
+
     /** Updates normalized microphone input amplitude (`0f..1f`) for UI visualization. */
     fun updateMicLevel(level: Float) {
         val clamped = level.coerceIn(0f, 1f)

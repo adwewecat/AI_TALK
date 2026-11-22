@@ -35,6 +35,8 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.WifiOff
@@ -45,6 +47,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFloatingActionButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -95,6 +98,7 @@ fun CompanionHomeScreen(
     onToggleService: (Boolean) -> Unit,
     onPushToTalk: () -> Unit,
     onSendText: (String) -> Unit,
+    onReplayMessage: (ChatMessage) -> Unit = {},
     onSyncNow: () -> Unit,
     onSignInDrive: () -> Unit,
 ) {
@@ -222,6 +226,27 @@ fun CompanionHomeScreen(
                     overflow = TextOverflow.Ellipsis,
                 )
 
+                if (voiceState.loopState == VoiceLoopState.LISTENING ||
+                    voiceState.loopState == VoiceLoopState.AWAITING_CONSENT
+                ) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { voiceState.micLevel.coerceIn(0.05f, 1f) },
+                        color = NaNaPalette.CoralError,
+                        trackColor = accentColor.copy(alpha = 0.2f),
+                        modifier = Modifier
+                            .fillMaxWidth(0.7f)
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(50)),
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Nói xong chờ 1.5s hoặc bấm nút đỏ để gửi ngay",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = NaNaPalette.CoralError,
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(10.dp))
 
                 Row(
@@ -237,9 +262,9 @@ fun CompanionHomeScreen(
                         )
                         Text(
                             text = if (isWakeModelAvailable) {
-                                "Vosk offline sẵn sàng · Bật để gọi \"Na Na\""
+                                "Vosk offline sẵn sàng · Bật để gọi \"Na Na\" bất cứ lúc nào"
                             } else {
-                                "Chưa có model Vosk offline · Dùng nút Mic hoặc gõ chữ"
+                                "Đang chuẩn bị model \"Na Na\" · Có thể dùng nút Mic hoặc gõ chữ"
                             },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -290,7 +315,10 @@ fun CompanionHomeScreen(
                 }
             } else {
                 items(messages, key = { it.id }) { msg ->
-                    ChatBubbleItem(message = msg)
+                    ChatBubbleItem(
+                        message = msg,
+                        onReplay = { onReplayMessage(msg) },
+                    )
                 }
             }
         }
@@ -298,6 +326,8 @@ fun CompanionHomeScreen(
         Spacer(modifier = Modifier.height(8.dp))
 
         // Bottom input fallback + Push-to-Talk FAB
+        val isCapturing = voiceState.loopState == VoiceLoopState.LISTENING ||
+            voiceState.loopState == VoiceLoopState.AWAITING_CONSENT
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -342,14 +372,14 @@ fun CompanionHomeScreen(
 
             LargeFloatingActionButton(
                 onClick = onPushToTalk,
-                containerColor = accentColor,
+                containerColor = if (isCapturing) NaNaPalette.CoralError else accentColor,
                 contentColor = Color(0xFF280517),
                 shape = CircleShape,
                 modifier = Modifier.size(64.dp),
             ) {
                 Icon(
-                    imageVector = Icons.Rounded.Mic,
-                    contentDescription = "Nhấn để nói với Na Na",
+                    imageVector = if (isCapturing) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                    contentDescription = if (isCapturing) "Bấm để gửi giọng nói ngay" else "Nhấn để nói với Na Na",
                     modifier = Modifier.size(30.dp),
                 )
             }
@@ -524,7 +554,10 @@ private fun WifiSyncPill(
 }
 
 @Composable
-private fun ChatBubbleItem(message: ChatMessage) {
+private fun ChatBubbleItem(
+    message: ChatMessage,
+    onReplay: () -> Unit,
+) {
     val isUser = message.role.equals("user", ignoreCase = true)
     val bubbleColor = if (isUser) {
         NaNaPalette.BubbleSlate
@@ -569,6 +602,16 @@ private fun ChatBubbleItem(message: ChatMessage) {
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     )
+                    if (!isUser) {
+                        Icon(
+                            imageVector = Icons.Rounded.VolumeUp,
+                            contentDescription = "Nghe lại",
+                            tint = NaNaPalette.SakuraPink,
+                            modifier = Modifier
+                                .size(18.dp)
+                                .clickable(onClick = onReplay),
+                        )
+                    }
                 }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
