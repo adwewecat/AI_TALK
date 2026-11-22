@@ -224,7 +224,7 @@ class VoskWakeWordEngine(
         private const val CONSENT_GRAMMAR_JSON =
             """["ok", "ô kê", "ừ", "có", "được", "đồng ý", "không", "thôi", "[unk]"]"""
         private const val LOCAL_COMMAND_GRAMMAR_JSON =
-            """["bắt máy", "nghe máy", "cúp máy", "tắt cuộc gọi", "bật loa ngoài", "tắt loa ngoài", "bật đèn pin", "tắt đèn pin", "tạm biệt", "nghỉ nhé", "dừng lại", "[unk]"]"""
+            """["tắt na na", "tắt nana", "ngưng nghe", "dừng nghe", "nghỉ thôi", "kết thúc", "tạm biệt", "nghỉ nhé", "dừng lại", "bắt máy", "nghe máy", "cúp máy", "tắt cuộc gọi", "bật loa ngoài", "tắt loa ngoài", "bật đèn pin", "tắt đèn pin", "[unk]"]"""
 
         private val json = Json { ignoreUnknownKeys = true }
 

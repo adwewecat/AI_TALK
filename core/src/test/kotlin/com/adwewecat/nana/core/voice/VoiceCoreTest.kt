@@ -64,6 +64,13 @@ class VoiceCoreTest {
         assertEquals(DeviceCommand.ToggleFlashlight(false), FastCommandParser.parseLocalCommand("tat den pin"))
 
         assertEquals(DeviceCommand.StopSession, FastCommandParser.parseLocalCommand("tạm biệt"))
+        assertEquals(DeviceCommand.StopSession, FastCommandParser.parseLocalCommand("tắt Na Na"))
+        assertEquals(DeviceCommand.StopSession, FastCommandParser.parseLocalCommand("tat nana"))
+        assertEquals(DeviceCommand.StopSession, FastCommandParser.parseLocalCommand("Na Na ơi tắt Na Na nhé"))
+        assertEquals(DeviceCommand.StopSession, FastCommandParser.parseLocalCommand("ngưng nghe"))
+        assertEquals(DeviceCommand.StopSession, FastCommandParser.parseLocalCommand("dừng nghe"))
+        assertEquals(DeviceCommand.StopSession, FastCommandParser.parseLocalCommand("nghỉ thôi"))
+        assertEquals(DeviceCommand.StopSession, FastCommandParser.parseLocalCommand("kết thúc"))
         assertEquals(DeviceCommand.StopSession, FastCommandParser.parseLocalCommand("nghỉ nhé"))
         assertEquals(DeviceCommand.StopSession, FastCommandParser.parseLocalCommand("thôi nha"))
         assertEquals(DeviceCommand.StopSession, FastCommandParser.parseLocalCommand("dừng lại"))

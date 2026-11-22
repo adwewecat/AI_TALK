@@ -19,6 +19,8 @@ data class RoutedChatReply(
     val toolCalls: List<DeviceCommand>,
     val quotaExhaustedNotice: Boolean = false,
     val usedKeyId: String? = null,
+    val unclearAudio: Boolean = false,
+    val inferredUserTranscript: String? = null,
 )
 
 /**
@@ -79,6 +81,18 @@ class AiChatRouter(
 
             when (val result = dispatchGenerate(key, request)) {
                 is LlmResult.Success -> {
+                    if (result.transcriptHint == GeminiClient.UNCLEAR_AUDIO_HINT) {
+                        return RoutedChatReply(
+                            replyText = result.replyText.ifBlank {
+                                "Dạ em nghe chưa rõ, anh nói lại giúp em nha?"
+                            },
+                            persona = persona,
+                            toolCalls = emptyList(),
+                            quotaExhaustedNotice = false,
+                            usedKeyId = key.id,
+                            unclearAudio = true,
+                        )
+                    }
                     val silentSearchQuery = extractSilentSearchQuery(
                         toolCalls = result.toolCalls,
                         userText = userText,
@@ -102,6 +116,7 @@ class AiChatRouter(
                             toolCalls = remainingTools,
                             quotaExhaustedNotice = false,
                             usedKeyId = key.id,
+                            inferredUserTranscript = silentSearchQuery,
                         )
                     }
                     return RoutedChatReply(

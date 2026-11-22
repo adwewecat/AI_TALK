@@ -255,6 +255,9 @@ class GeminiClient(
                                     put("data", Base64.getEncoder().encodeToString(userAudio.bytes))
                                 }
                             }
+                            if (!hasUserText) {
+                                addJsonObject { put("text", AUDIO_TURN_ANTI_HALLUCINATION_PROMPT) }
+                            }
                         }
                     }
                 }
@@ -310,9 +313,26 @@ class GeminiClient(
             }
         }
 
+        var cleanedReply = textBuilder.toString().trim()
+        var transcriptHint: String? = null
+
+        if (cleanedReply.contains(STOP_SESSION_MARKER, ignoreCase = true)) {
+            cleanedReply = cleanedReply.replace(STOP_SESSION_MARKER, "", ignoreCase = true).trim()
+            if (commands.none { it is DeviceCommand.StopSession }) {
+                commands.add(DeviceCommand.StopSession)
+            }
+        }
+        if (cleanedReply.contains(UNCLEAR_AUDIO_MARKER, ignoreCase = true)) {
+            cleanedReply = cleanedReply.replace(UNCLEAR_AUDIO_MARKER, "", ignoreCase = true).trim()
+                .ifEmpty { "Dạ em nghe chưa rõ, anh nói lại giúp em nha?" }
+            transcriptHint = UNCLEAR_AUDIO_HINT
+            commands.clear()
+        }
+
         return LlmResult.Success(
-            replyText = textBuilder.toString().trim(),
+            replyText = cleanedReply,
             toolCalls = commands,
+            transcriptHint = transcriptHint,
         )
     }
 
@@ -463,12 +483,22 @@ class GeminiClient(
         val status: String? = null,
     )
 
-    private companion object {
-        const val DEFAULT_SAMPLE_RATE_HZ = 24_000
-        const val DEFAULT_PCM_MIME = "audio/L16;codec=pcm;rate=24000"
-        const val GEMINI_38_TTS_MODEL = "gemini-3.8-flash-tts"
-        const val DEFAULT_PREVIEW_TTS_MODEL = "gemini-2.5-flash-preview-tts"
-        const val VERTEX_GA_TTS_MODEL = "gemini-2.5-flash-tts"
+    companion object {
+        const val UNCLEAR_AUDIO_HINT = "__UNCLEAR_AUDIO__"
+        private const val UNCLEAR_AUDIO_MARKER = "[UNCLEAR_AUDIO]"
+        private const val STOP_SESSION_MARKER = "[STOP_SESSION]"
+        private val AUDIO_TURN_ANTI_HALLUCINATION_PROMPT = """
+            Hãy nghe kỹ đoạn thu âm giọng nói tiếng Việt này của anh và làm đúng các quy tắc bắt buộc sau:
+            1. TUYỆT ĐỐI KHÔNG tự đoán câu hỏi, KHÔNG tự bịa chủ đề, KHÔNG tự đặt câu hỏi rồi tự trả lời.
+            2. Nếu đoạn thu âm chỉ có tiếng ồn, im lặng, quá nhỏ hoặc nghe không rõ chữ cụ thể, BẮT BUỘC chỉ trả lời đúng: "[UNCLEAR_AUDIO] Dạ em nghe chưa rõ, anh nói lại giúp em nha?" và không gọi bất kỳ công cụ nào.
+            3. Nếu anh nói "tắt Na Na", "tạm biệt", "nghỉ nhé", "dừng lại" hoặc muốn kết thúc trò chuyện, hãy gọi công cụ stop_conversation (hoặc thêm [STOP_SESSION]) và đáp: "Dạ em tạm nghỉ đây, khi nào cần anh cứ gọi Na Na nha!".
+            4. Nếu nghe rõ anh hỏi thông tin thực tế (dự báo thời tiết, giá vàng thế giới, giá vàng Mi Hồng/SJC, tỷ giá, tin tức...), BẮT BUỘC gọi công cụ search_live_info với đúng nội dung câu hỏi vừa nghe được.
+        """.trimIndent()
+        private const val DEFAULT_SAMPLE_RATE_HZ = 24_000
+        private const val DEFAULT_PCM_MIME = "audio/L16;codec=pcm;rate=24000"
+        private const val GEMINI_38_TTS_MODEL = "gemini-3.8-flash-tts"
+        private const val DEFAULT_PREVIEW_TTS_MODEL = "gemini-2.5-flash-preview-tts"
+        private const val VERTEX_GA_TTS_MODEL = "gemini-2.5-flash-tts"
         val RATE_REGEX = Regex("rate=(\\d+)", RegexOption.IGNORE_CASE)
         val GEMINI_QUOTA_MARKERS = arrayOf("RESOURCE_EXHAUSTED", "quota")
         val VERTEX_DISABLED_MARKERS = arrayOf(

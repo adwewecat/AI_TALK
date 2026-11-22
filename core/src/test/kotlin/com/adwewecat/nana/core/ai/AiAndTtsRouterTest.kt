@@ -746,6 +746,54 @@ class AiAndTtsRouterTest {
     }
 
     @Test
+    fun chatRouterHandlesUnclearAudioWithoutHallucinatingAndSupportsStopSessionMarker() = runTest {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody(
+                    """{"candidates":[{"content":{"parts":[{"text":"[UNCLEAR_AUDIO] Dạ em nghe chưa rõ, anh nói lại giúp em nha?"}]}}]}""",
+                ),
+        )
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody(
+                    """{"candidates":[{"content":{"parts":[{"text":"[STOP_SESSION] Dạ em tạm nghỉ đây, khi nào cần anh cứ gọi Na Na nha!"}]}}]}""",
+                ),
+        )
+
+        val keyPool = KeyPoolManager(initialKeys = listOf(paidGeminiKey(id = "gem-unclear", priority = 1)))
+        val stateMachine = NaNaQuotaStateMachine(keyPool)
+        val router = AiChatRouter(
+            keyPool = keyPool,
+            stateMachine = stateMachine,
+            geminiClient = geminiClient,
+            openAiClient = openAiClient,
+            claudeClient = claudeClient,
+        )
+
+        val unclearReply = router.sendTurn(
+            history = emptyList(),
+            memories = emptyList(),
+            userText = null,
+            userAudio = AudioAttachment(bytes = byteArrayOf(1, 2, 3, 4), mimeType = "audio/wav"),
+        )
+        assertTrue(unclearReply.unclearAudio)
+        assertEquals("Dạ em nghe chưa rõ, anh nói lại giúp em nha?", unclearReply.replyText)
+        assertTrue(unclearReply.toolCalls.isEmpty())
+
+        val stopReply = router.sendTurn(
+            history = emptyList(),
+            memories = emptyList(),
+            userText = null,
+            userAudio = AudioAttachment(bytes = byteArrayOf(5, 6, 7, 8), mimeType = "audio/wav"),
+        )
+        assertFalse(stopReply.unclearAudio)
+        assertEquals("Dạ em tạm nghỉ đây, khi nào cần anh cứ gọi Na Na nha!", stopReply.replyText)
+        assertEquals(listOf<DeviceCommand>(DeviceCommand.StopSession), stopReply.toolCalls)
+    }
+
+    @Test
     fun memoryExtractorGuardsNonFiniteConfidenceValues() {
         val extractor = MemoryExtractor()
         val raw = """

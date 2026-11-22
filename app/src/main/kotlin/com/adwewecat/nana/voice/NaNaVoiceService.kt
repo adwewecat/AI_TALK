@@ -359,6 +359,12 @@ class NaNaVoiceService : Service() {
                 }
             }
             orchestrator.onUserUtterance(transcript = offlineTranscript, wavBytes = wavBytes)
+            // Brief acoustic guard after TTS playback finishes so speaker reverb never triggers a phantom turn.
+            if (serviceScope.isActive && _isRunning.value &&
+                orchestrator.uiState.value.loopState == VoiceLoopState.LISTENING
+            ) {
+                kotlinx.coroutines.delay(POST_SPEECH_ECHO_GUARD_MS)
+            }
         }
 
         if (_isRunning.value && orchestrator.uiState.value.loopState == VoiceLoopState.IDLE_WAKE) {
@@ -385,7 +391,7 @@ class NaNaVoiceService : Service() {
             }
 
             val vad = EnergyVad(
-                speechRmsThreshold = 180.0,
+                speechRmsThreshold = SPEECH_RMS_THRESHOLD,
                 silenceDurationMs = 1_500L,
                 maxUtteranceMs = 20_000L,
             )
@@ -393,6 +399,9 @@ class NaNaVoiceService : Service() {
             val fallbackBuffer = ByteArrayOutputStream()
             val frame = ShortArray(CAPTURE_FRAME_SAMPLES)
             var speechStarted = false
+            var speechFrameCount = 0
+            var peakRms = 0.0
+            var utteranceDurationMs = 0L
             var idleElapsedMs = 0L
             var preRollBytes: ByteArray? = null
 
@@ -425,18 +434,48 @@ class NaNaVoiceService : Service() {
 
                     VadEvent.SPEECH_STARTED -> {
                         speechStarted = true
+                        speechFrameCount = 1
+                        peakRms = rms
+                        utteranceDurationMs = frameDurationMs
                         preRollBytes?.let { pcmBuffer.write(it) }
                         preRollBytes = null
                         pcmBuffer.write(chunkBytes)
                     }
 
                     VadEvent.SPEECH_ACTIVE -> {
+                        utteranceDurationMs += frameDurationMs
+                        if (rms >= SPEECH_RMS_THRESHOLD) {
+                            speechFrameCount++
+                        }
+                        if (rms > peakRms) {
+                            peakRms = rms
+                        }
                         pcmBuffer.write(chunkBytes)
                     }
 
                     VadEvent.UTTERANCE_COMPLETE -> {
+                        utteranceDurationMs += frameDurationMs
+                        if (rms >= SPEECH_RMS_THRESHOLD) {
+                            speechFrameCount++
+                        }
+                        if (rms > peakRms) {
+                            peakRms = rms
+                        }
                         pcmBuffer.write(chunkBytes)
-                        return@withContext CaptureResult(pcmBytes = pcmBuffer.toByteArray())
+                        // Reject brief ambient noise spikes / clicks / breaths (< 300ms speech or low peak energy)
+                        // so Na Na never hallucinates phantom questions when the user is silent.
+                        if (speechFrameCount >= MIN_SPEECH_FRAMES && peakRms >= MIN_PEAK_SPEECH_RMS) {
+                            return@withContext CaptureResult(pcmBytes = pcmBuffer.toByteArray())
+                        }
+                        pcmBuffer.reset()
+                        speechStarted = false
+                        speechFrameCount = 0
+                        peakRms = 0.0
+                        idleElapsedMs += utteranceDurationMs
+                        utteranceDurationMs = 0L
+                        if (idleElapsedMs >= maxWaitForSpeechMs) {
+                            return@withContext CaptureResult(pcmBytes = null)
+                        }
                     }
                 }
 
@@ -449,9 +488,12 @@ class NaNaVoiceService : Service() {
                 return@withContext CaptureResult(pcmBytes = null)
             }
             val manualBytes = when {
-                speechStarted && pcmBuffer.size() > 0 -> pcmBuffer.toByteArray()
+                finishCaptureRequested.get() && speechStarted && pcmBuffer.size() > 0 ->
+                    pcmBuffer.toByteArray()
                 finishCaptureRequested.get() && fallbackBuffer.size() >= MIN_MANUAL_SEND_PCM_BYTES ->
                     fallbackBuffer.toByteArray()
+                speechStarted && speechFrameCount >= MIN_SPEECH_FRAMES && peakRms >= MIN_PEAK_SPEECH_RMS ->
+                    pcmBuffer.toByteArray()
                 else -> null
             }
             CaptureResult(pcmBytes = manualBytes)
@@ -658,6 +700,10 @@ class NaNaVoiceService : Service() {
         private const val REQUEST_PUSH_TO_TALK = 11
         private const val REQUEST_STOP = 12
         private const val CAPTURE_FRAME_SAMPLES = 1_600
+        private const val SPEECH_RMS_THRESHOLD = 320.0
+        private const val MIN_SPEECH_FRAMES = 3
+        private const val MIN_PEAK_SPEECH_RMS = 450.0
+        private const val POST_SPEECH_ECHO_GUARD_MS = 400L
         private const val MAX_FALLBACK_PCM_BYTES = 16_000 * 2 * 15
         private const val MIN_MANUAL_SEND_PCM_BYTES = 16_000 * 2 / 4
         private const val WAKE_LOCK_TAG = "NaNa:VoiceWakeLock"

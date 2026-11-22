@@ -176,6 +176,8 @@ object ToolSchemaParser {
                 DeviceCommand.WebSearch(query = query)
             }
 
+            "stop_conversation" -> DeviceCommand.StopSession
+
             else -> null
         }
     }
@@ -314,6 +316,10 @@ internal object DeviceToolSchemas {
             params = listOf(
                 ToolParamSpec("query", "string", "Search query to open in browser", required = true),
             ),
+        ),
+        ToolSpec(
+            name = "stop_conversation",
+            description = "End the active voice conversation and return Na Na to silent background wake-word standby when the user says 'tắt Na Na', 'tạm biệt', 'nghỉ nhé', 'dừng lại', or wants to stop talking.",
         ),
     )
 

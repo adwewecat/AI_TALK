@@ -31,7 +31,7 @@ class SilentWebSearchClient(
 
     /** Fetches top up-to-date Vietnamese/global snippets silently over HTTP. */
     suspend fun search(query: String, maxResults: Int = 8): List<SearchSnippet> {
-        val trimmed = query.trim()
+        val trimmed = enrichVietnameseLiveQuery(query.trim())
         if (trimmed.isEmpty()) return emptyList()
         val encoded = URLEncoder.encode(trimmed, Charsets.UTF_8.name())
 
@@ -150,6 +150,18 @@ class SilentWebSearchClient(
             .filter { it.snippet.isNotBlank() }
             .take(6)
             .toList()
+
+    private fun enrichVietnameseLiveQuery(raw: String): String {
+        if (raw.isEmpty()) return raw
+        val lower = raw.lowercase()
+        // If user asks general weather ("dự báo thời tiết thế nào") without location, append Việt Nam hôm nay.
+        if ((lower.contains("thời tiết") || lower.contains("thoi tiet")) &&
+            !lower.contains("hôm nay") && !lower.contains("hom nay")
+        ) {
+            return "$raw Việt Nam hôm nay"
+        }
+        return raw
+    }
 
     private fun extractTag(block: String, tag: String): String {
         val regex = Regex("<$tag[^>]*>(.*?)</$tag>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))

@@ -35,7 +35,19 @@ object FastCommandParser {
         listOf("tat loa ngoai") to DeviceCommand.ToggleSpeaker(false),
         listOf("bat den pin") to DeviceCommand.ToggleFlashlight(true),
         listOf("tat den pin") to DeviceCommand.ToggleFlashlight(false),
-        listOf("tam biet", "nghi nhe", "thoi nha", "dung lai", "im di") to DeviceCommand.StopSession,
+        listOf(
+            "tat na na",
+            "tat nana",
+            "ngung nghe",
+            "dung nghe",
+            "nghi thoi",
+            "ket thuc",
+            "tam biet",
+            "nghi nhe",
+            "thoi nha",
+            "dung lai",
+            "im di",
+        ) to DeviceCommand.StopSession,
     )
 
     /** Lowercases [text], maps `đ`/`Đ` to `d`, strips diacritics, and collapses whitespace. */

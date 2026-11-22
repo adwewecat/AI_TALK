@@ -98,6 +98,9 @@ class NaNaVoiceOrchestrator(
     @Volatile
     private var currentSessionMessageCount: Int = 0
 
+    @Volatile
+    private var consecutiveUnclearAudioTurns: Int = 0
+
     val uiState: StateFlow<VoiceUiSnapshot> = _uiState.asStateFlow()
 
     /** Handles wake-word activation, entering listening or playing the tired consent prompt. */
@@ -452,7 +455,7 @@ class NaNaVoiceOrchestrator(
     private suspend fun handleFastCommand(command: DeviceCommand) {
         val persona = stateMachine.activePersona
         if (command is DeviceCommand.StopSession) {
-            val farewell = "Dạ tạm biệt anh nha!"
+            val farewell = "Dạ em tạm nghỉ đây, khi nào cần anh cứ gọi Na Na nha!"
             _uiState.update {
                 it.copy(
                     loopState = VoiceLoopState.SPEAKING,
@@ -530,6 +533,34 @@ class NaNaVoiceOrchestrator(
             userAudio = audioAttachment,
         )
 
+        if (reply.unclearAudio) {
+            consecutiveUnclearAudioTurns++
+            val askAgain = reply.replyText.ifBlank { "Dạ em nghe chưa rõ, anh nói lại giúp em nha?" }
+            _uiState.update {
+                it.copy(
+                    loopState = VoiceLoopState.SPEAKING,
+                    quotaState = stateMachine.state,
+                    activePersona = reply.persona,
+                    statusMessage = askAgain,
+                )
+            }
+            speakViaTtsRouter(askAgain, reply.persona)
+            if (consecutiveUnclearAudioTurns >= MAX_CONSECUTIVE_UNCLEAR_AUDIO_TURNS) {
+                applyStopSession(loopState = VoiceLoopState.IDLE_WAKE)
+            } else {
+                _uiState.update {
+                    it.copy(
+                        loopState = VoiceLoopState.LISTENING,
+                        quotaState = stateMachine.state,
+                        activePersona = stateMachine.activePersona,
+                        statusMessage = listeningMessageFor(stateMachine.activePersona),
+                    )
+                }
+            }
+            return
+        }
+        consecutiveUnclearAudioTurns = 0
+
         var shouldStopSession = false
         var lastActionFeedback: String? = null
         for (command in reply.toolCalls) {
@@ -543,7 +574,9 @@ class NaNaVoiceOrchestrator(
             }
         }
 
-        val userContent = trimmedTranscript ?: "[Tin nhắn thoại]"
+        val userContent = trimmedTranscript
+            ?: reply.inferredUserTranscript?.let { "[Giọng nói] $it" }
+            ?: "[Tin nhắn thoại]"
         val userTimeMs = clockMs()
         messageDao.upsert(
             ChatMessage(
@@ -653,6 +686,7 @@ class NaNaVoiceOrchestrator(
         val sessionMessageCount = currentSessionMessageCount
         currentSessionId = null
         currentSessionMessageCount = 0
+        consecutiveUnclearAudioTurns = 0
         stateMachine.onSessionEnded()
         val newQuotaState = stateMachine.state
         val newPersona = stateMachine.activePersona
@@ -699,5 +733,6 @@ class NaNaVoiceOrchestrator(
     companion object {
         const val WAKE_GREETING_TEXT = "Dạ em nghe!"
         private const val MAX_HISTORY_MESSAGES = 20
+        private const val MAX_CONSECUTIVE_UNCLEAR_AUDIO_TURNS = 2
     }
 }
