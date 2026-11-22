@@ -608,7 +608,14 @@ class NaNaVoiceService : Service() {
 
         val orchestrator = NaNaVoiceOrchestrator(
             stateMachine = stateMachine,
-            aiChatRouter = AiChatRouter(keyPool, stateMachine, geminiClient, openAiClient, claudeClient),
+            aiChatRouter = AiChatRouter(
+                keyPool = keyPool,
+                stateMachine = stateMachine,
+                geminiClient = geminiClient,
+                openAiClient = openAiClient,
+                claudeClient = claudeClient,
+                silentWebSearchClient = com.adwewecat.nana.core.ai.SilentWebSearchClient(httpClient),
+            ),
             ttsRouter = TtsRouter(keyPool, geminiClient, openAiClient, localTts),
             localFallbackTts = localTts,
             actionExecutor = fallbackExecutor,

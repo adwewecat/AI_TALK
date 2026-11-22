@@ -10,6 +10,7 @@ import com.adwewecat.nana.core.model.ProviderType
 import com.adwewecat.nana.core.model.QuotaState
 import com.adwewecat.nana.core.quota.KeyPoolManager
 import com.adwewecat.nana.core.quota.NaNaQuotaStateMachine
+import com.adwewecat.nana.core.voice.FastCommandParser
 
 /** Normalized chat response produced by [AiChatRouter]. */
 data class RoutedChatReply(
@@ -22,7 +23,8 @@ data class RoutedChatReply(
 
 /**
  * Routes conversational turns across configured paid and free-tier LLM keys,
- * handling silent failover, Whisper audio transcription fallback, and quota state transitions.
+ * handling silent failover, silent background web search synthesis, Whisper audio transcription
+ * fallback, and quota state transitions.
  */
 class AiChatRouter(
     private val keyPool: KeyPoolManager,
@@ -31,6 +33,7 @@ class AiChatRouter(
     private val openAiClient: OpenAiClient,
     private val claudeClient: ClaudeClient,
     private val clockMs: () -> Long = { System.currentTimeMillis() },
+    private val silentWebSearchClient: SilentWebSearchClient? = null,
 ) {
 
     /**
@@ -76,10 +79,35 @@ class AiChatRouter(
 
             when (val result = dispatchGenerate(key, request)) {
                 is LlmResult.Success -> {
+                    val silentSearchQuery = extractSilentSearchQuery(
+                        toolCalls = result.toolCalls,
+                        userText = userText,
+                    )
+                    if (silentSearchQuery != null && silentWebSearchClient != null) {
+                        val remainingTools = result.toolCalls.filterNot {
+                            it is DeviceCommand.SilentWebSearch || it is DeviceCommand.WebSearch
+                        }
+                        val synthesized = synthesizeSilentWebAnswer(
+                            key = key,
+                            systemPrompt = systemPrompt,
+                            history = history,
+                            originalUserText = userText,
+                            searchQuery = silentSearchQuery,
+                        )
+                        return RoutedChatReply(
+                            replyText = synthesized ?: result.replyText.ifBlank {
+                                "Dạ em đã tìm \"$silentSearchQuery\" nhưng hiện chưa lấy được thông tin rõ ràng, anh thử hỏi lại sau một chút nha."
+                            },
+                            persona = persona,
+                            toolCalls = remainingTools,
+                            quotaExhaustedNotice = false,
+                            usedKeyId = key.id,
+                        )
+                    }
                     return RoutedChatReply(
                         replyText = result.replyText,
                         persona = persona,
-                        toolCalls = result.toolCalls,
+                        toolCalls = result.toolCalls.filterNot { it is DeviceCommand.SilentWebSearch },
                         quotaExhaustedNotice = false,
                         usedKeyId = key.id,
                     )
@@ -192,6 +220,63 @@ class AiChatRouter(
         return openAiClient.transcribeAudio(whisperKey, wavBytes)
     }
 
+    private fun extractSilentSearchQuery(
+        toolCalls: List<DeviceCommand>,
+        userText: String?,
+    ): String? {
+        val explicitSilent = toolCalls.filterIsInstance<DeviceCommand.SilentWebSearch>().firstOrNull()
+        if (explicitSilent != null) {
+            return explicitSilent.query
+        }
+        val accidentalBrowserSearch = toolCalls.filterIsInstance<DeviceCommand.WebSearch>().firstOrNull()
+            ?: return null
+        // Guard against the LLM launching a browser when the user only asked a voice/text question
+        // without explicitly requesting "mở web" / "mở trình duyệt".
+        return if (userExplicitlyRequestedBrowser(userText)) {
+            null
+        } else {
+            accidentalBrowserSearch.query
+        }
+    }
+
+    private fun userExplicitlyRequestedBrowser(userText: String?): Boolean {
+        val norm = FastCommandParser.normalizeVietnamese(userText.orEmpty())
+        if (norm.isEmpty()) return false
+        return EXPLICIT_BROWSER_PHRASES.any { phrase -> norm.contains(phrase) }
+    }
+
+    private suspend fun synthesizeSilentWebAnswer(
+        key: ApiKeyEntry,
+        systemPrompt: String,
+        history: List<ChatMessage>,
+        originalUserText: String?,
+        searchQuery: String,
+    ): String? {
+        val client = silentWebSearchClient ?: return null
+        val snippets = client.search(searchQuery)
+        val formattedResults = client.formatForPrompt(searchQuery, snippets)
+        val question = originalUserText?.takeIf { it.isNotBlank() } ?: searchQuery
+        val synthesisPrompt = """
+            Câu hỏi của anh: "$question"
+
+            $formattedResults
+
+            Hãy tổng hợp ngắn gọn, rõ ràng, tự nhiên bằng tiếng Việt để đọc trực tiếp cho anh nghe (không đọc URL, không dùng dấu * hay gạch đầu dòng). Nếu có số liệu giá cả hoặc ngày cập nhật thì nêu rõ.
+        """.trimIndent()
+
+        val synthesisRequest = LlmRequest(
+            systemPrompt = systemPrompt,
+            history = history,
+            userText = synthesisPrompt,
+            userAudio = null,
+            enableTools = false,
+        )
+        return when (val followUp = dispatchGenerate(key, synthesisRequest)) {
+            is LlmResult.Success -> followUp.replyText.trim().takeIf { it.isNotEmpty() }
+            else -> null
+        }
+    }
+
     private suspend fun dispatchGenerate(key: ApiKeyEntry, request: LlmRequest): LlmResult =
         when (key.provider) {
             ProviderType.GEMINI_VERTEX_EXPRESS,
@@ -211,6 +296,16 @@ class AiChatRouter(
             ProviderType.GEMINI_VERTEX_EXPRESS,
             ProviderType.GEMINI_AI_STUDIO,
             ProviderType.FREE_GEMINI,
+        )
+
+        val EXPLICIT_BROWSER_PHRASES = listOf(
+            "mo web",
+            "mo trinh duyet",
+            "mo trang web",
+            "mo chrome",
+            "mo google tren man hinh",
+            "open browser",
+            "open web",
         )
 
         const val LITTLE_SISTER_OFFLINE_REPLY =

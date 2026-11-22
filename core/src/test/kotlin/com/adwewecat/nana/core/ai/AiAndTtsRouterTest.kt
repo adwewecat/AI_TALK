@@ -658,6 +658,94 @@ class AiAndTtsRouterTest {
     }
 
     @Test
+    fun chatRouterExecutesSilentWebSearchWithoutOpeningBrowserAndSynthesizesSpokenAnswer() = runTest {
+        // 1. Model calls search_live_info (or even web_search without user saying "mở web")
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody(
+                    """
+                    {
+                      "candidates": [
+                        {
+                          "content": {
+                            "parts": [
+                              {
+                                "functionCall": {
+                                  "name": "search_live_info",
+                                  "args": { "query": "giá vàng hôm nay thế giới và Mi Hồng" }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                    """.trimIndent(),
+                ),
+        )
+        // 2 & 3. Bing RSS + Google News RSS return live gold prices
+        val rssXml = """
+            <rss version="2.0"><channel>
+              <item>
+                <title>Giá vàng Mi Hồng hôm nay 133,5 triệu đồng/lượng</title>
+                <description>Vàng thế giới XAU 3.575 USD/oz, Mi Hồng mua vào 13,2 triệu bán ra 13,35 triệu/chỉ.</description>
+                <pubDate>Sun, 22 Nov 2026 09:00:00 GMT</pubDate>
+              </item>
+            </channel></rss>
+        """.trimIndent()
+        server.enqueue(MockResponse().setResponseCode(200).setBody(rssXml))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(rssXml))
+        // 4. Second Gemini call synthesizes natural spoken Vietnamese answer
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody(
+                    """
+                    {
+                      "candidates": [
+                        {
+                          "content": {
+                            "parts": [
+                              { "text": "Dạ hôm nay giá vàng thế giới khoảng 3.575 đô một ounce, còn tại Mi Hồng giá bán ra là 133,5 triệu đồng một lượng nha anh!" }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                    """.trimIndent(),
+                ),
+        )
+
+        val base = server.url("/").toString().trimEnd('/')
+        val silentSearch = SilentWebSearchClient(
+            httpClient = httpClient,
+            bingBaseUrl = base,
+            googleNewsBaseUrl = base,
+            duckDuckGoBaseUrl = base,
+        )
+        val keyPool = KeyPoolManager(initialKeys = listOf(paidGeminiKey(id = "gem-gold", priority = 1)))
+        val stateMachine = NaNaQuotaStateMachine(keyPool)
+        val router = AiChatRouter(
+            keyPool = keyPool,
+            stateMachine = stateMachine,
+            geminiClient = geminiClient,
+            openAiClient = openAiClient,
+            claudeClient = claudeClient,
+            silentWebSearchClient = silentSearch,
+        )
+
+        val reply = router.sendTurn(
+            history = emptyList(),
+            memories = emptyList(),
+            userText = "Giá vàng hôm nay thế giới và Mi Hồng thế nào?",
+        )
+
+        assertTrue("Expected spoken gold price answer, got: ${reply.replyText}", reply.replyText.contains("133,5 triệu"))
+        assertTrue("Browser must NOT be opened when user did not ask to open web", reply.toolCalls.isEmpty())
+    }
+
+    @Test
     fun memoryExtractorGuardsNonFiniteConfidenceValues() {
         val extractor = MemoryExtractor()
         val raw = """

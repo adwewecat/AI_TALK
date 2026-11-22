@@ -138,6 +138,9 @@ sealed class DeviceCommand {
     data class MakePhoneCall(val target: String) : DeviceCommand()
 
     @Serializable
+    data class MakeZaloCall(val target: String) : DeviceCommand()
+
+    @Serializable
     data class OpenApp(val appName: String) : DeviceCommand()
 
     @Serializable
@@ -155,6 +158,9 @@ sealed class DeviceCommand {
 
     @Serializable
     data class ToggleFlashlight(val enabled: Boolean) : DeviceCommand()
+
+    @Serializable
+    data class SilentWebSearch(val query: String) : DeviceCommand()
 
     @Serializable
     data class WebSearch(val query: String) : DeviceCommand()

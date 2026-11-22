@@ -14,6 +14,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -93,6 +95,7 @@ import java.time.format.DateTimeFormatter
  * 1-tap Drive reauth banner, always-listening switch, live chat bubbles,
  * text input fallback, and big Push-to-Talk FAB.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CompanionHomeScreen(
     voiceState: VoiceUiSnapshot,
@@ -220,7 +223,10 @@ fun CompanionHomeScreen(
                         color = NaNaPalette.SakuraPink,
                     )
                     Spacer(modifier = Modifier.height(6.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
                         if (!micGranted) {
                             FilledTonalButton(
                                 onClick = onRequestMicPermission,

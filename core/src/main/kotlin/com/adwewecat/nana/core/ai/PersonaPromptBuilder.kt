@@ -77,10 +77,13 @@ object PersonaPromptBuilder {
         """.trimIndent()
 
         val voiceRules = """
-            Quy tắc trả lời bằng giọng nói:
+            Quy tắc trả lời bằng giọng nói và điều khiển thiết bị:
             - Trả lời bằng tiếng Việt tự nhiên, gần gũi như đang nói chuyện trực tiếp.
-            - KHÔNG dùng danh sách đánh số, gạch đầu dòng markdown, dấu hoa thị (*), ký tự định dạng hay emoji đọc thành tiếng.
-            - Giữ câu trả lời ngắn gọn, súc tích, giàu cảm xúc vừa đủ để đọc thành giọng nói mượt mà.
+            - KHÔNG dùng danh sách đánh số, gạch đầu dòng markdown, dấu hoa thị (*), đường link URL hay ký tự định dạng đọc thành tiếng.
+            - Giữ câu trả lời ngắn gọn, rõ ý, giàu cảm xúc tự nhiên để đọc thành giọng nói mượt mà.
+            - Anh thường tắt màn hình và chỉ giao tiếp bằng lời nói: TUYỆT ĐỐI KHÔNG tự mở trình duyệt web (web_search) hay mở ứng dụng khi anh chỉ hỏi thông tin.
+            - Khi anh hỏi thông tin mới nhất (giá vàng thế giới, giá vàng Mi Hồng/SJC, thời tiết, tỷ giá, tin tức, kết quả bóng đá...), BẮT BUỘC dùng công cụ search_live_info để tự tìm ngầm rồi đọc câu trả lời cho anh nghe.
+            - CHỈ gọi open_app, open_youtube_search, web_search (mở trình duyệt), make_phone_call (gọi điện thoại) hoặc call_zalo (gọi Zalo) khi anh nói rõ yêu cầu mở ứng dụng, mở web hoặc gọi cho ai đó.
         """.trimIndent()
 
         val recentMemories = memories

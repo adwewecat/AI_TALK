@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -41,10 +42,80 @@ class NaNaAccessibilityService : AccessibilityService() {
         val packageName = event.packageName?.toString() ?: return
         if (packageName == YOUTUBE_PACKAGE && isYouTubeAutoPlayArmed()) {
             handleYouTubeAutoPlayOnRoot(rootInActiveWindow)
+        } else if (packageName == ZALO_PACKAGE && isZaloAutoCallArmed()) {
+            handleZaloAutoCallOnRoot(rootInActiveWindow)
         }
     }
 
     override fun onInterrupt() = Unit
+
+    /**
+     * Drives Zalo UI automation within a 15-second armed window:
+     * 1. If opened to Zalo home (`!directChatOpened`), taps the search bar, types the contact name, and taps the matching row.
+     * 2. Inside the chat screen, taps the voice call button (`Gọi thoại` / `Call`) and disarms.
+     */
+    fun handleZaloAutoCallOnRoot(
+        root: AccessibilityNodeInfo?,
+        nowMs: Long = System.currentTimeMillis(),
+    ): Boolean {
+        if (!isZaloAutoCallArmed(nowMs)) {
+            disarmZaloAutoCall()
+            return false
+        }
+        val target = armedZaloTarget ?: return false
+        if (root == null || root.packageName?.toString() != ZALO_PACKAGE) {
+            return false
+        }
+
+        // 1. If a voice-call button is already visible (e.g. inside the person's chat window), tap it and finish.
+        val voiceCallNode = findZaloVoiceCallNode(root)
+        if (voiceCallNode != null) {
+            val clickable = findClickableAncestor(voiceCallNode)
+            if (clickable != null && clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                disarmZaloAutoCall()
+                return true
+            }
+        }
+
+        val normTarget = FastCommandParser.normalizeVietnamese(target)
+        if (normTarget.isEmpty()) return false
+
+        // 2. If a search EditText is visible, inject the target name and tap the matching contact result.
+        val searchInput = findFirstEditText(root)
+        if (searchInput != null) {
+            if (!zaloTextTyped) {
+                val args = Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, target)
+                }
+                searchInput.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                if (searchInput.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+                    zaloTextTyped = true
+                    return true
+                }
+            }
+            val contactMatch = findZaloContactResultNode(root, normTarget, searchInput)
+            if (contactMatch != null) {
+                val clickable = findClickableAncestor(contactMatch)
+                if (clickable != null && clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                    zaloChatSelected = true
+                    return true
+                }
+            }
+        }
+
+        // 3. Otherwise tap Zalo's top search bar to open the search input.
+        if (!zaloSearchOpened && !zaloChatSelected) {
+            val searchBar = findZaloSearchEntryNode(root)
+            if (searchBar != null) {
+                val clickable = findClickableAncestor(searchBar)
+                if (clickable != null && clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                    zaloSearchOpened = true
+                    return true
+                }
+            }
+        }
+        return false
+    }
 
     /** Attempts to tap the first non-ad YouTube video node on [root] if still within the 10s arm window. */
     fun handleYouTubeAutoPlayOnRoot(
@@ -250,9 +321,85 @@ class NaNaAccessibilityService : AccessibilityService() {
         return null
     }
 
+    private fun findFirstEditText(root: AccessibilityNodeInfo): AccessibilityNodeInfo? =
+        findNodeBreadthFirst(root) { node ->
+            node.className?.toString()?.endsWith("EditText") == true && node.isVisibleToUser
+        }
+
+    private fun findZaloSearchEntryNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? =
+        findNodeBreadthFirst(root) { node ->
+            val labels = listOfNotNull(
+                node.text?.toString(),
+                node.contentDescription?.toString(),
+                node.viewIdResourceName,
+            )
+            labels.any { raw ->
+                val norm = FastCommandParser.normalizeVietnamese(raw)
+                norm.contains("tim kiem") || norm.contains("search")
+            } && findClickableAncestor(node) != null
+        }
+
+    private fun findZaloContactResultNode(
+        root: AccessibilityNodeInfo,
+        normTarget: String,
+        searchInput: AccessibilityNodeInfo,
+    ): AccessibilityNodeInfo? =
+        findNodeBreadthFirst(root) { node ->
+            if (node == searchInput || node.className?.toString()?.endsWith("EditText") == true) {
+                false
+            } else {
+                val labels = listOfNotNull(node.text?.toString(), node.contentDescription?.toString())
+                labels.any { raw ->
+                    val norm = FastCommandParser.normalizeVietnamese(raw)
+                    norm.isNotEmpty() && (norm == normTarget || norm.contains(normTarget))
+                } && findClickableAncestor(node) != null
+            }
+        }
+
+    private fun findZaloVoiceCallNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? =
+        findNodeBreadthFirst(root) { node ->
+            val labels = listOfNotNull(
+                node.contentDescription?.toString(),
+                node.text?.toString(),
+                node.viewIdResourceName,
+            )
+            labels.any { raw ->
+                val norm = FastCommandParser.normalizeVietnamese(raw)
+                val isVoiceCall = norm == "goi thoai" ||
+                    norm == "goi dien" ||
+                    norm == "audio call" ||
+                    norm == "voice call" ||
+                    norm.contains("menu_call") ||
+                    norm.contains("btn_call") ||
+                    norm.contains("action_call") ||
+                    (norm == "goi" && !norm.contains("video"))
+                isVoiceCall && !norm.contains("video")
+            } && findClickableAncestor(node) != null
+        }
+
+    private fun findNodeBreadthFirst(
+        root: AccessibilityNodeInfo,
+        predicate: (AccessibilityNodeInfo) -> Boolean,
+    ): AccessibilityNodeInfo? {
+        val visited = IdentityHashMap<AccessibilityNodeInfo, Boolean>()
+        val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+        queue.add(root to 0)
+        while (queue.isNotEmpty()) {
+            val (node, depth) = queue.removeFirst()
+            if (visited.put(node, true) != null || depth > MAX_TREE_DEPTH) continue
+            if (predicate(node)) return node
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { child -> queue.add(child to depth + 1) }
+            }
+        }
+        return null
+    }
+
     companion object {
         const val YOUTUBE_PACKAGE = "com.google.android.youtube"
+        const val ZALO_PACKAGE = "com.zing.zalo"
         const val YOUTUBE_ARM_WINDOW_MS = 10_000L
+        const val ZALO_ARM_WINDOW_MS = 15_000L
 
         private const val MAX_TREE_DEPTH = 30
         private const val MAX_AD_CHECK_DEPTH = 5
@@ -322,6 +469,21 @@ class NaNaAccessibilityService : AccessibilityService() {
         @Volatile
         private var armedUntilMs: Long = 0L
 
+        @Volatile
+        private var armedZaloTarget: String? = null
+
+        @Volatile
+        private var armedZaloUntilMs: Long = 0L
+
+        @Volatile
+        private var zaloSearchOpened: Boolean = false
+
+        @Volatile
+        private var zaloTextTyped: Boolean = false
+
+        @Volatile
+        private var zaloChatSelected: Boolean = false
+
         /** Arms auto-play for [query] during the next 10 seconds when YouTube search results open. */
         fun armYouTubeAutoPlay(query: String, nowMs: Long = System.currentTimeMillis()) {
             val trimmed = query.trim()
@@ -339,6 +501,34 @@ class NaNaAccessibilityService : AccessibilityService() {
         /** Returns true while a YouTube search query is armed and within its 10-second window. */
         fun isYouTubeAutoPlayArmed(nowMs: Long = System.currentTimeMillis()): Boolean =
             armedYouTubeQuery != null && nowMs <= armedUntilMs
+
+        /** Arms Zalo contact search & voice-call tap for [target] during the next 15 seconds. */
+        fun armZaloAutoCall(
+            target: String,
+            directChatOpened: Boolean = false,
+            nowMs: Long = System.currentTimeMillis(),
+        ) {
+            val trimmed = target.trim()
+            if (trimmed.isEmpty()) return
+            armedZaloTarget = trimmed
+            armedZaloUntilMs = nowMs + ZALO_ARM_WINDOW_MS
+            zaloSearchOpened = directChatOpened
+            zaloTextTyped = directChatOpened
+            zaloChatSelected = directChatOpened
+        }
+
+        /** Disarms any pending Zalo auto-call trigger. */
+        fun disarmZaloAutoCall() {
+            armedZaloTarget = null
+            armedZaloUntilMs = 0L
+            zaloSearchOpened = false
+            zaloTextTyped = false
+            zaloChatSelected = false
+        }
+
+        /** Returns true while a Zalo auto-call target is armed and within its 15-second window. */
+        fun isZaloAutoCallArmed(nowMs: Long = System.currentTimeMillis()): Boolean =
+            armedZaloTarget != null && nowMs <= armedZaloUntilMs
 
         /** Triggers Tier 3 Accessibility Answer/Decline button tap on the active call screen. */
         fun triggerCallAction(wantAnswer: Boolean): Boolean =

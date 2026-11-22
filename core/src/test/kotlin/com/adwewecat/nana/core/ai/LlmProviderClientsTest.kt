@@ -177,7 +177,7 @@ class LlmProviderClientsTest {
         assertEquals("user", contents[2].jsonObject["role"]!!.jsonPrimitive.content)
 
         val declarations = payload["tools"]!!.jsonArray[0].jsonObject["functionDeclarations"]!!.jsonArray
-        assertEquals(11, declarations.size)
+        assertEquals(13, declarations.size)
 
         assertTrue(result is LlmResult.Success)
         val success = result as LlmResult.Success
@@ -649,6 +649,20 @@ class LlmProviderClientsTest {
             ToolSchemaParser.parseCommand(
                 "toggle_flashlight",
                 buildJsonObject { put("enabled", JsonPrimitive(false)) },
+            ),
+        )
+        assertEquals(
+            DeviceCommand.MakeZaloCall("Anh Tuấn"),
+            ToolSchemaParser.parseCommand(
+                "call_zalo",
+                buildJsonObject { put("target", JsonPrimitive("Anh Tuấn")) },
+            ),
+        )
+        assertEquals(
+            DeviceCommand.SilentWebSearch("giá vàng hôm nay thế giới và Mi Hồng"),
+            ToolSchemaParser.parseCommand(
+                "search_live_info",
+                buildJsonObject { put("query", JsonPrimitive("giá vàng hôm nay thế giới và Mi Hồng")) },
             ),
         )
         assertEquals(

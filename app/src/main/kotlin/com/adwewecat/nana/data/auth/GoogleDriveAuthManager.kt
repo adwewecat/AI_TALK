@@ -73,6 +73,8 @@ class GoogleDriveAuthManager(
      */
     fun buildAuthIntent(): Intent? {
         if (!isOAuthConfigured()) return null
+        // Android OAuth Client IDs reject web-only `access_type=offline` on some Google Cloud setups
+        // and automatically issue refresh tokens on PKCE code exchange once Custom URI scheme is enabled.
         val request = AuthorizationRequest.Builder(
             serviceConfig,
             clientId.trim(),
@@ -80,11 +82,7 @@ class GoogleDriveAuthManager(
             redirectUriFor(clientId),
         )
             .setScopes(SCOPE_OPENID, SCOPE_EMAIL, SCOPE_PROFILE, SCOPE_DRIVE_FILE)
-            .setPromptValues(
-                AuthorizationRequest.Prompt.SELECT_ACCOUNT,
-                AuthorizationRequest.Prompt.CONSENT,
-            )
-            .setAdditionalParameters(mapOf("access_type" to "offline"))
+            .setPromptValues(AuthorizationRequest.Prompt.SELECT_ACCOUNT)
             .build()
         return authService.getAuthorizationRequestIntent(request)
     }

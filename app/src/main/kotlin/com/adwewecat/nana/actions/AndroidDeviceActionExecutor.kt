@@ -146,11 +146,13 @@ class AndroidDeviceActionExecutor(
         DeviceCommand.EndCall -> handleCallControl(answer = false)
         is DeviceCommand.ToggleSpeaker -> handleToggleSpeaker(command.enabled)
         is DeviceCommand.MakePhoneCall -> handleMakePhoneCall(command.target)
+        is DeviceCommand.MakeZaloCall -> handleMakeZaloCall(command.target)
         is DeviceCommand.OpenApp -> handleOpenApp(command.appName)
         is DeviceCommand.SetAlarm -> handleSetAlarm(command.hour, command.minute, command.label)
         is DeviceCommand.SetTimer -> handleSetTimer(command.seconds, command.label)
         is DeviceCommand.AdjustVolume -> handleAdjustVolume(command.stream, command.direction, command.percent)
         is DeviceCommand.ToggleFlashlight -> handleToggleFlashlight(command.enabled)
+        is DeviceCommand.SilentWebSearch -> ActionExecutionResult(succeeded = true, spokenFeedback = "")
         is DeviceCommand.WebSearch -> handleWebSearch(command.query)
         DeviceCommand.StopSession -> ActionExecutionResult(
             succeeded = true,
@@ -356,6 +358,78 @@ class AndroidDeviceActionExecutor(
                 succeeded = false,
                 spokenFeedback = "Em không khởi tạo được cuộc gọi tới $target ạ.",
             )
+        }
+    }
+
+    private fun handleMakeZaloCall(rawTarget: String): ActionExecutionResult {
+        val target = rawTarget.trim()
+        if (target.isEmpty()) {
+            return ActionExecutionResult(
+                succeeded = false,
+                spokenFeedback = "Anh muốn em gọi Zalo cho ai ạ?",
+            )
+        }
+
+        val pm = context.packageManager
+        val zaloLaunchIntent = pm.getLaunchIntentForPackage(NaNaAccessibilityService.ZALO_PACKAGE)
+            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (zaloLaunchIntent == null) {
+            return ActionExecutionResult(
+                succeeded = false,
+                spokenFeedback = "Em chưa thấy ứng dụng Zalo được cài trên máy ạ.",
+            )
+        }
+
+        val phone = when {
+            looksLikePhoneNumber(target) -> normalizeVnPhoneForZalo(target)
+            hasPermission(context, Manifest.permission.READ_CONTACTS) ->
+                lookupContactNumber(target)?.let(::normalizeVnPhoneForZalo)
+            else -> null
+        }
+
+        if (phone != null) {
+            NaNaAccessibilityService.armZaloAutoCall(target = target, directChatOpened = true)
+            val directIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://zalo.me/$phone")).apply {
+                setPackage(NaNaAccessibilityService.ZALO_PACKAGE)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val openedDirect = runCatching {
+                context.startActivity(directIntent)
+                true
+            }.getOrDefault(false)
+            if (openedDirect) {
+                return ActionExecutionResult(
+                    succeeded = true,
+                    spokenFeedback = "Dạ, em đang mở Zalo để gọi cho $target cho anh ạ.",
+                )
+            }
+        }
+
+        NaNaAccessibilityService.armZaloAutoCall(target = target, directChatOpened = false)
+        val launched = runCatching {
+            context.startActivity(zaloLaunchIntent)
+            true
+        }.getOrDefault(false)
+        return if (launched) {
+            ActionExecutionResult(
+                succeeded = true,
+                spokenFeedback = "Dạ, em đang mở Zalo tìm $target và gọi cho anh ngay đây ạ.",
+            )
+        } else {
+            NaNaAccessibilityService.disarmZaloAutoCall()
+            ActionExecutionResult(
+                succeeded = false,
+                spokenFeedback = "Em chưa mở được Zalo trên máy ạ.",
+            )
+        }
+    }
+
+    private fun normalizeVnPhoneForZalo(raw: String): String {
+        val digits = raw.filter { it.isDigit() }
+        return if (digits.startsWith("84") && digits.length >= 10) {
+            "0${digits.drop(2)}"
+        } else {
+            digits
         }
     }
 

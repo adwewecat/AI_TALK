@@ -129,6 +129,11 @@ object ToolSchemaParser {
                 DeviceCommand.MakePhoneCall(target = target)
             }
 
+            "call_zalo" -> {
+                val target = args.stringArg("target") ?: return null
+                DeviceCommand.MakeZaloCall(target = target)
+            }
+
             "open_app" -> {
                 val appName = args.stringArg("app_name") ?: return null
                 DeviceCommand.OpenApp(appName = appName)
@@ -159,6 +164,11 @@ object ToolSchemaParser {
             "toggle_flashlight" -> {
                 val enabled = args.booleanArg("enabled") ?: return null
                 DeviceCommand.ToggleFlashlight(enabled = enabled)
+            }
+
+            "search_live_info" -> {
+                val query = args.stringArg("query") ?: return null
+                DeviceCommand.SilentWebSearch(query = query)
             }
 
             "web_search" -> {
@@ -239,14 +249,21 @@ internal object DeviceToolSchemas {
         ),
         ToolSpec(
             name = "make_phone_call",
-            description = "Place a phone call to a contact name or phone number.",
+            description = "Place a regular SIM phone call to a contact name or phone number. Only call when user explicitly asks to call someone.",
             params = listOf(
                 ToolParamSpec("target", "string", "Contact name or phone number", required = true),
             ),
         ),
         ToolSpec(
+            name = "call_zalo",
+            description = "Open Zalo, search for the specified contact name or phone number, and place a Zalo voice call. Only call when user explicitly asks to call on Zalo.",
+            params = listOf(
+                ToolParamSpec("target", "string", "Contact name or phone number on Zalo", required = true),
+            ),
+        ),
+        ToolSpec(
             name = "open_app",
-            description = "Open an installed Android application by name.",
+            description = "Open an installed Android application by name. ONLY call when user explicitly asks to open that app.",
             params = listOf(
                 ToolParamSpec("app_name", "string", "Application name to launch", required = true),
             ),
@@ -285,10 +302,17 @@ internal object DeviceToolSchemas {
             ),
         ),
         ToolSpec(
-            name = "web_search",
-            description = "Search the web in the device browser.",
+            name = "search_live_info",
+            description = "Silently search the web in the background WITHOUT opening a browser, to answer live or recent questions by voice (gold prices, Mi Hong, SJC, weather, exchange rates, news, sports, current facts).",
             params = listOf(
-                ToolParamSpec("query", "string", "Search query", required = true),
+                ToolParamSpec("query", "string", "Vietnamese or English search query", required = true),
+            ),
+        ),
+        ToolSpec(
+            name = "web_search",
+            description = "Open the phone's web browser visibly on screen. ONLY call when the user EXPLICITLY says 'mở web', 'mở trình duyệt', or 'mở trang web'. NEVER call this for normal questions; use search_live_info instead.",
+            params = listOf(
+                ToolParamSpec("query", "string", "Search query to open in browser", required = true),
             ),
         ),
     )

@@ -18,6 +18,7 @@ import com.adwewecat.nana.core.ai.LlmRequest
 import com.adwewecat.nana.core.ai.LlmResult
 import com.adwewecat.nana.core.ai.OpenAiClient
 import com.adwewecat.nana.core.ai.PersonaPromptBuilder
+import com.adwewecat.nana.core.ai.SilentWebSearchClient
 import com.adwewecat.nana.core.ai.TtsRouter
 import com.adwewecat.nana.core.ai.TtsResult
 import com.adwewecat.nana.core.ai.VietnameseWebTtsClient
@@ -113,12 +114,15 @@ class AppContainer internal constructor(
     val keyPool: KeyPoolManager = KeyPoolManager(_keysFlow.value)
     val quotaStateMachine: NaNaQuotaStateMachine = NaNaQuotaStateMachine(keyPool)
 
+    val silentWebSearchClient: SilentWebSearchClient = SilentWebSearchClient(httpClient)
+
     val aiChatRouter: AiChatRouter = AiChatRouter(
         keyPool = keyPool,
         stateMachine = quotaStateMachine,
         geminiClient = geminiClient,
         openAiClient = openAiClient,
         claudeClient = claudeClient,
+        silentWebSearchClient = silentWebSearchClient,
     )
 
     val systemTtsEngine: AndroidSystemTtsEngine = AndroidSystemTtsEngine(appContext)
