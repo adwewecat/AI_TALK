@@ -22,7 +22,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AccessibilityNew
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -32,7 +31,6 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Mic
-import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.RecordVoiceOver
 import androidx.compose.material.icons.rounded.Refresh
@@ -76,8 +74,6 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.adwewecat.nana.actions.NaNaAccessibilityService
-import com.adwewecat.nana.actions.NaNaNotificationListener
 import com.adwewecat.nana.core.model.ApiKeyEntry
 import com.adwewecat.nana.core.model.KeyStatus
 import com.adwewecat.nana.core.model.ProviderType
@@ -161,15 +157,8 @@ fun SettingsScreen(
     }
     val phoneGranted = remember(resumeTick) {
         hasPermission(context, Manifest.permission.READ_PHONE_STATE) &&
-            hasPermission(context, Manifest.permission.ANSWER_PHONE_CALLS) &&
             hasPermission(context, Manifest.permission.CALL_PHONE) &&
             hasPermission(context, Manifest.permission.READ_CONTACTS)
-    }
-    val notificationAccessEnabled = remember(resumeTick) {
-        NaNaNotificationListener.isEnabled(context)
-    }
-    val accessibilityEnabled = remember(resumeTick) {
-        NaNaAccessibilityService.isServiceEnabled(context)
     }
     val batteryUnrestricted = remember(resumeTick) {
         OriginOsSetupHelper.isIgnoringBatteryOptimizations(context)
@@ -499,7 +488,7 @@ fun SettingsScreen(
                 icon = Icons.Rounded.Security,
             ) {
                 Text(
-                    text = "Cấp đủ các quyền bên dưới để Na Na chạy nền ổn định trên OriginOS 6, nghe/tắt SIM & Zalo/Messenger, và tự phát YouTube.",
+                    text = "Cấp đủ các quyền bên dưới để Na Na chạy nền ổn định trên OriginOS 6, tìm kiếm YouTube, gọi điện & danh bạ.",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -514,24 +503,10 @@ fun SettingsScreen(
                 )
                 ChecklistActionRow(
                     title = "Điện thoại & Danh bạ",
-                    subtitle = "Gọi theo tên danh bạ, bắt máy SIM & quét sau cuộc gọi",
+                    subtitle = "Gọi theo tên danh bạ & nhận biết trạng thái cuộc gọi",
                     granted = phoneGranted,
                     icon = Icons.Rounded.PhoneAndroid,
                     onClick = onRequestPhoneAndContactsPermission,
-                )
-                ChecklistActionRow(
-                    title = "Quyền truy cập thông báo (SIM + Zalo/Messenger)",
-                    subtitle = "Nghe hoặc từ chối cuộc gọi không cần đổi trình quay số mặc định",
-                    granted = notificationAccessEnabled,
-                    icon = Icons.Rounded.NotificationsActive,
-                    onClick = { OriginOsSetupHelper.launchSafely(context, OriginOsSetupHelper.notificationListenerIntent()) },
-                )
-                ChecklistActionRow(
-                    title = "Trợ năng (YouTube Auto-Play & nút cuộc gọi)",
-                    subtitle = "Tự bấm phát video đầu tiên khi yêu cầu mở nhạc YouTube",
-                    granted = accessibilityEnabled,
-                    icon = Icons.Rounded.AccessibilityNew,
-                    onClick = { OriginOsSetupHelper.launchSafely(context, OriginOsSetupHelper.accessibilitySettingsIntent()) },
                 )
                 ChecklistActionRow(
                     title = "Bỏ qua tối ưu pin (Không hạn chế)",

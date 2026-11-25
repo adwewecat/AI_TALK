@@ -195,7 +195,6 @@ class MainActivity : ComponentActivity() {
     private fun requestPhoneAndContactsPermissions() {
         val perms = buildList {
             add(Manifest.permission.READ_PHONE_STATE)
-            add(Manifest.permission.ANSWER_PHONE_CALLS)
             add(Manifest.permission.CALL_PHONE)
             add(Manifest.permission.READ_CONTACTS)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

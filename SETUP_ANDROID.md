@@ -72,16 +72,12 @@ App đồng bộ lịch sử trò chuyện, ký ức (`MemoryFact`) và ghi âm 
 Vào tab **Cài đặt** -> **Checklist OriginOS 6 (iQOO)** và bấm lần lượt từng mục:
 
 1. **Micro & Thông báo:** Cho phép `RECORD_AUDIO` và `POST_NOTIFICATIONS` để Na Na lắng nghe và hiển thị điều khiển nhanh.
-2. **Điện thoại & Danh bạ:** Cho phép `READ_PHONE_STATE`, `ANSWER_PHONE_CALLS`, `CALL_PHONE`, `READ_CONTACTS`, `READ_MEDIA_AUDIO` để gọi theo tên danh bạ, bắt/tắt cuộc gọi SIM và nhận biết khi cuộc gọi kết thúc.
+2. **Điện thoại & Danh bạ:** Cho phép `READ_PHONE_STATE`, `CALL_PHONE`, `READ_CONTACTS`, `READ_MEDIA_AUDIO` để gọi theo tên danh bạ và nhận biết khi cuộc gọi kết thúc (hoàn toàn không yêu cầu quyền Trợ năng hay Lắng nghe thông báo, an toàn 100% với ứng dụng ngân hàng).
 3. **Chọn thư mục ghi âm `Record/Call`:**
    - Trong app iQOO **Điện thoại -> Cài đặt ghi âm cuộc gọi**, bật ghi âm cuộc gọi tự động nếu muốn lưu mọi cuộc gọi.
    - Mở tab **Ghi âm** hoặc **Cài đặt** trong Na Na -> bấm **Chọn thư mục OriginOS `Record/Call`** -> cấp quyền thư mục `Record/Call` qua trình chọn thư mục hệ thống (SAF).
    - Sau mỗi cuộc gọi, app đợi 2 giây cho file ghi âm đóng hoàn tất rồi tự copy vào vùng đệm và chờ Wi-Fi để tải lên Drive (không dùng 4G/5G).
-4. **Quyền truy cập thông báo (SIM + Zalo / Messenger / Telegram):**
-   - Bấm **Cấp quyền** -> bật công tắc cho **`Na Na — Nghe/từ chối cuộc gọi`** -> giúp Na Na nghe hoặc từ chối cuộc gọi SIM và VoIP mà không cần đổi trình quay số mặc định của iQOO.
-5. **Dịch vụ Trợ năng (YouTube Auto-Play & nút cuộc gọi):**
-   - Bấm **Cấp quyền** -> bật **`Na Na — Tự phát YouTube & hỗ trợ cuộc gọi`** -> khi nói `"Mở YouTube tìm ..."`, Na Na sẽ tự bỏ qua quảng cáo và bấm phát video đầu tiên.
-6. **Chống đóng app chạy nền trên OriginOS 6 (rất quan trọng):**
+4. **Chống đóng app chạy nền trên OriginOS 6 (rất quan trọng):**
    - **Bỏ qua tối ưu pin:** chọn Na Na -> đặt mức **Không hạn chế (Don't optimize / Unrestricted)**.
    - **Tự khởi chạy & Chạy nền cao (iQOO Security / Pin):** bấm **Mở** tại dòng *Tự khởi chạy & Chạy nền cao* -> bật **Autostart** và cho phép **Tiêu thụ pin nền cao (High background power consumption)** cho Na Na.
    - *(Mẹo thêm trên OriginOS 6)*: Vuốt lên mở màn hình Đa nhiệm -> kéo nhẹ thẻ app Na Na xuống hoặc bấm menu góc thẻ -> chọn **Khóa (Lock)** để giữ app không bị dọn RAM.

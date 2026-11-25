@@ -26,10 +26,7 @@ import com.adwewecat.nana.core.voice.FastCommandParser
 import kotlin.math.roundToInt
 
 /**
- * 3-tier call Answer/Decline bridge operating without replacing the system dialer:
- * Tier 1: [NaNaNotificationListener] notification `PendingIntent` (SIM + Zalo/Messenger/Telegram)
- * Tier 2: [TelecomManager] API (SIM calls)
- * Tier 3: [NaNaAccessibilityService] UI button tap fallback
+ * 3-tier call Answer/Decline bridge operating without replacing the system dialer.
  */
 interface CallControlBridge {
     fun triggerNotificationCallAction(answer: Boolean): Boolean
@@ -42,72 +39,16 @@ interface YouTubeLauncher {
     fun launchSearch(query: String, autoPlay: Boolean): Boolean
 }
 
-/** Production [CallControlBridge] backed by NotificationListener, TelecomManager, and AccessibilityService. */
+/** Production [CallControlBridge] returning safe defaults without requiring high-risk services. */
 class AndroidCallControlBridge(
-    private val context: Context,
+    @Suppress("UNUSED_PARAMETER") private val context: Context,
 ) : CallControlBridge {
 
-    override fun triggerNotificationCallAction(answer: Boolean): Boolean =
-        NaNaNotificationListener.triggerActiveCallAction(wantAnswer = answer)
+    override fun triggerNotificationCallAction(answer: Boolean): Boolean = false
 
-    @Suppress("DEPRECATION")
-    override fun triggerTelecomCallAction(answer: Boolean): Boolean {
-        if (!hasPermission(context, Manifest.permission.ANSWER_PHONE_CALLS)) {
-            return false
-        }
-        val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as? TelecomManager
-            ?: return false
-        val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-        val hasPhoneState = hasPermission(context, Manifest.permission.READ_PHONE_STATE)
+    override fun triggerTelecomCallAction(answer: Boolean): Boolean = false
 
-        return if (answer) {
-            val isSimRinging = if (hasPhoneState && telephonyManager != null) {
-                @Suppress("DEPRECATION")
-                telephonyManager.callState == TelephonyManager.CALL_STATE_RINGING
-            } else {
-                audioManager?.mode == AudioManager.MODE_RINGTONE
-            }
-            if (!isSimRinging) {
-                false
-            } else {
-                try {
-                    telecomManager.acceptRingingCall()
-                    true
-                } catch (_: SecurityException) {
-                    false
-                } catch (_: Throwable) {
-                    false
-                }
-            }
-        } else {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-                false
-            } else {
-                val hasActiveSimCall = if (hasPhoneState && telephonyManager != null) {
-                    @Suppress("DEPRECATION")
-                    telephonyManager.callState != TelephonyManager.CALL_STATE_IDLE
-                } else {
-                    true
-                }
-                if (!hasActiveSimCall) {
-                    false
-                } else {
-                    try {
-                        @Suppress("DEPRECATION")
-                        telecomManager.endCall()
-                    } catch (_: SecurityException) {
-                        false
-                    } catch (_: Throwable) {
-                        false
-                    }
-                }
-            }
-        }
-    }
-
-    override fun triggerAccessibilityCallAction(answer: Boolean): Boolean =
-        NaNaAccessibilityService.triggerCallAction(wantAnswer = answer)
+    override fun triggerAccessibilityCallAction(answer: Boolean): Boolean = false
 }
 
 /** Production [YouTubeLauncher] targeting `com.google.android.youtube` with web fallback. */
@@ -115,9 +56,13 @@ class AndroidYouTubeLauncher(
     private val context: Context,
 ) : YouTubeLauncher {
 
+    companion object {
+        const val YOUTUBE_PACKAGE = "com.google.android.youtube"
+    }
+
     override fun launchSearch(query: String, autoPlay: Boolean): Boolean {
         val youtubeIntent = Intent(Intent.ACTION_SEARCH).apply {
-            setPackage(NaNaAccessibilityService.YOUTUBE_PACKAGE)
+            setPackage(YOUTUBE_PACKAGE)
             putExtra(SearchManager.QUERY, query)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
@@ -168,14 +113,8 @@ class AndroidDeviceActionExecutor(
                 spokenFeedback = "Anh muốn em mở bài hát hay video gì trên YouTube ạ?",
             )
         }
-        if (command.autoPlay) {
-            NaNaAccessibilityService.armYouTubeAutoPlay(query)
-        } else {
-            NaNaAccessibilityService.disarmYouTubeAutoPlay()
-        }
         val launched = youTubeLauncher.launchSearch(query, command.autoPlay)
         if (!launched) {
-            NaNaAccessibilityService.disarmYouTubeAutoPlay()
             return ActionExecutionResult(
                 succeeded = false,
                 spokenFeedback = "Em chưa mở được YouTube trên máy ạ.",
@@ -228,27 +167,6 @@ class AndroidDeviceActionExecutor(
     }
 
     private fun buildCallFailureResult(answer: Boolean): ActionExecutionResult {
-        if (!NaNaNotificationListener.isEnabled(context)) {
-            return ActionExecutionResult(
-                succeeded = false,
-                spokenFeedback = "Em chưa có quyền truy cập thông báo để nghe hoặc cúp cuộc gọi SIM, Zalo, Messenger. Anh bật quyền thông báo cho Na Na trong Cài đặt nhé.",
-                missingPermissionAction = Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS,
-            )
-        }
-        if (!hasPermission(context, Manifest.permission.ANSWER_PHONE_CALLS)) {
-            return ActionExecutionResult(
-                succeeded = false,
-                spokenFeedback = "Em cần quyền trả lời cuộc gọi điện thoại. Anh cấp quyền Điện thoại cho Na Na trong Cài đặt nhé.",
-                missingPermissionAction = Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-            )
-        }
-        if (!NaNaAccessibilityService.isServiceEnabled(context)) {
-            return ActionExecutionResult(
-                succeeded = false,
-                spokenFeedback = "Em chưa thấy thông báo cuộc gọi phù hợp và Trợ năng hỗ trợ bấm nút chưa được bật ạ.",
-                missingPermissionAction = Settings.ACTION_ACCESSIBILITY_SETTINGS,
-            )
-        }
         return ActionExecutionResult(
             succeeded = false,
             spokenFeedback = if (answer) {
@@ -370,16 +288,6 @@ class AndroidDeviceActionExecutor(
             )
         }
 
-        val pm = context.packageManager
-        val zaloLaunchIntent = pm.getLaunchIntentForPackage(NaNaAccessibilityService.ZALO_PACKAGE)
-            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (zaloLaunchIntent == null) {
-            return ActionExecutionResult(
-                succeeded = false,
-                spokenFeedback = "Em chưa thấy ứng dụng Zalo được cài trên máy ạ.",
-            )
-        }
-
         val phone = when {
             looksLikePhoneNumber(target) -> normalizeVnPhoneForZalo(target)
             hasPermission(context, Manifest.permission.READ_CONTACTS) ->
@@ -388,9 +296,8 @@ class AndroidDeviceActionExecutor(
         }
 
         if (phone != null) {
-            NaNaAccessibilityService.armZaloAutoCall(target = target, directChatOpened = true)
             val directIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://zalo.me/$phone")).apply {
-                setPackage(NaNaAccessibilityService.ZALO_PACKAGE)
+                setPackage(ZALO_PACKAGE)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             val openedDirect = runCatching {
@@ -405,23 +312,26 @@ class AndroidDeviceActionExecutor(
             }
         }
 
-        NaNaAccessibilityService.armZaloAutoCall(target = target, directChatOpened = false)
-        val launched = runCatching {
-            context.startActivity(zaloLaunchIntent)
-            true
-        }.getOrDefault(false)
-        return if (launched) {
-            ActionExecutionResult(
-                succeeded = true,
-                spokenFeedback = "Dạ, em đang mở Zalo tìm $target và gọi cho anh ngay đây ạ.",
-            )
-        } else {
-            NaNaAccessibilityService.disarmZaloAutoCall()
-            ActionExecutionResult(
-                succeeded = false,
-                spokenFeedback = "Em chưa mở được Zalo trên máy ạ.",
-            )
+        val pm = context.packageManager
+        val zaloLaunchIntent = pm.getLaunchIntentForPackage(ZALO_PACKAGE)
+            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (zaloLaunchIntent != null) {
+            val launched = runCatching {
+                context.startActivity(zaloLaunchIntent)
+                true
+            }.getOrDefault(false)
+            if (launched) {
+                return ActionExecutionResult(
+                    succeeded = true,
+                    spokenFeedback = "Dạ, em đang mở Zalo để anh gọi cho $target nhé.",
+                )
+            }
         }
+
+        return ActionExecutionResult(
+            succeeded = false,
+            spokenFeedback = "Em chưa thấy ứng dụng Zalo được cài trên máy ạ.",
+        )
     }
 
     private fun normalizeVnPhoneForZalo(raw: String): String {
@@ -775,6 +685,7 @@ class AndroidDeviceActionExecutor(
     }
 
     private companion object {
+        const val ZALO_PACKAGE = "com.zing.zalo"
         val APP_PACKAGE_ALIASES = mapOf(
             "zalo" to "com.zing.zalo",
             "messenger" to "com.facebook.orca",

@@ -1,9 +1,6 @@
 package com.adwewecat.nana.actions
 
 import android.app.Application
-import android.app.Notification
-import android.app.PendingIntent
-import android.app.RemoteInput
 import android.app.SearchManager
 import android.content.ContentProvider
 import android.content.ContentValues
@@ -12,12 +9,9 @@ import android.content.Intent
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
-import android.os.Process
 import android.provider.AlarmClock
 import android.provider.DocumentsContract
 import android.provider.Settings
-import android.service.notification.StatusBarNotification
-import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.core.app.ApplicationProvider
 import com.adwewecat.nana.core.model.DeviceCommand
 import com.adwewecat.nana.core.model.RecordingSource
@@ -53,14 +47,10 @@ class DeviceActionsAndCallRecordingTest {
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
         db = NaNaDatabase.createInMemory(context)
-        NaNaAccessibilityService.disarmYouTubeAutoPlay()
-        NaNaNotificationListener.clearTrackedCallsForTest()
     }
 
     @After
     fun tearDown() {
-        NaNaAccessibilityService.disarmYouTubeAutoPlay()
-        NaNaNotificationListener.clearTrackedCallsForTest()
         db.close()
     }
 
@@ -136,90 +126,16 @@ class DeviceActionsAndCallRecordingTest {
     }
 
     @Test(timeout = 15_000)
-    fun notificationCallActionMatcherFindsSimZaloAndMessengerAnswerButtons() {
-        val packages = listOf(
-            "com.android.incallui",
-            "com.android.dialer",
-            "com.vivo.dialer",
-            "com.vivo.incallui",
-            "com.google.android.dialer",
-            "com.zing.zalo",
-            "com.facebook.orca",
-            "org.telegram.messenger",
-        )
+    fun makeZaloCallOpensDirectLinkOrPackageIntent() = runTest {
+        val executor = AndroidDeviceActionExecutor(context = context)
+        val shadowApp = shadowOf(context as Application)
 
-        val viAnswerLabels = listOf("Trả lời", "Nghe máy", "Nghe", "Chấp nhận")
-        val enAnswerLabels = listOf("Answer", "Accept")
-        val viDeclineLabels = listOf("Từ chối", "Cúp máy", "Kết thúc")
-        val enDeclineLabels = listOf("Decline", "Reject", "End", "Hang up")
-
-        for (pkg in packages) {
-            assertTrue("Expected $pkg in SUPPORTED_CALL_PACKAGES", pkg in IncomingCallNotificationMatcher.SUPPORTED_CALL_PACKAGES)
-            for (answerLabel in viAnswerLabels + enAnswerLabels) {
-                assertEquals(
-                    "Answer match failed for $pkg / $answerLabel",
-                    1,
-                    IncomingCallNotificationMatcher.matchAction(pkg, listOf("Từ chối", answerLabel), wantAnswer = true),
-                )
-            }
-            for (declineLabel in viDeclineLabels + enDeclineLabels) {
-                assertEquals(
-                    "Decline match failed for $pkg / $declineLabel",
-                    0,
-                    IncomingCallNotificationMatcher.matchAction(pkg, listOf(declineLabel, "Answer"), wantAnswer = false),
-                )
-            }
-        }
-
-        // Unsupported package or substring collision ("Send") must not match.
-        assertNull(IncomingCallNotificationMatcher.matchAction("com.example.unknown", listOf("Answer", "Decline"), wantAnswer = true))
-        assertNull(IncomingCallNotificationMatcher.matchAction("com.zing.zalo", listOf("Send message"), wantAnswer = false))
-
-        // Verify NaNaNotificationListener tracks incoming Zalo call and fires Answer PendingIntent,
-        // while ignoring chat notifications with RemoteInput inline reply ("Trả lời").
-        val listener = Robolectric.buildService(NaNaNotificationListener::class.java).create().get()
-        val chatReplyIntent = PendingIntent.getActivity(
-            context,
-            10,
-            Intent("com.adwewecat.nana.TEST_CHAT_REPLY"),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
-        val chatNotification = Notification.Builder(context, "chat")
-            .setSmallIcon(android.R.drawable.ic_dialog_email)
-            .setContentTitle("Tin nhắn Zalo")
-            .addAction(
-                Notification.Action.Builder(null, "Trả lời", chatReplyIntent)
-                    .addRemoteInput(RemoteInput.Builder("key_reply").setLabel("Trả lời").build())
-                    .build(),
-            )
-            .build()
-        listener.onNotificationPosted(createSbn("com.zing.zalo", 101, chatNotification))
-        assertFalse(NaNaNotificationListener.triggerActiveCallAction(wantAnswer = true))
-
-        val zaloAnswerIntent = PendingIntent.getActivity(
-            context,
-            11,
-            Intent("com.adwewecat.nana.TEST_ZALO_ANSWER"),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
-        val zaloDeclineIntent = PendingIntent.getActivity(
-            context,
-            12,
-            Intent("com.adwewecat.nana.TEST_ZALO_DECLINE"),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
-        val zaloCallNotification = Notification.Builder(context, "call")
-            .setSmallIcon(android.R.drawable.sym_call_incoming)
-            .setCategory(Notification.CATEGORY_CALL)
-            .setContentTitle("Cuộc gọi Zalo đến")
-            .addAction(Notification.Action.Builder(null, "Từ chối", zaloDeclineIntent).build())
-            .addAction(Notification.Action.Builder(null, "Trả lời", zaloAnswerIntent).build())
-            .build()
-        listener.onNotificationPosted(createSbn("com.zing.zalo", 102, zaloCallNotification))
-
-        assertTrue(NaNaNotificationListener.triggerActiveCallAction(wantAnswer = true))
-        val firedIntent = shadowOf(context as Application).nextStartedActivity
-        assertEquals("com.adwewecat.nana.TEST_ZALO_ANSWER", firedIntent?.action)
+        val directResult = executor.execute(DeviceCommand.MakeZaloCall(target = "0901234567"))
+        assertTrue(directResult.succeeded)
+        val startedIntent = shadowApp.nextStartedActivity
+        assertNotNull(startedIntent)
+        assertEquals(Intent.ACTION_VIEW, startedIntent.action)
+        assertEquals("https://zalo.me/0901234567", startedIntent.dataString)
     }
 
     @Test(timeout = 15_000)
@@ -255,7 +171,7 @@ class DeviceActionsAndCallRecordingTest {
         assertTrue(tier3Result.succeeded)
         assertEquals(listOf("tier1:answer", "tier2:answer", "tier3:answer"), calls)
 
-        // All 3 fail -> returns failure with Vietnamese guidance and missingPermissionAction.
+        // All 3 fail -> returns failure with Vietnamese guidance.
         calls.clear()
         val failExecutor = AndroidDeviceActionExecutor(
             context = context,
@@ -264,7 +180,6 @@ class DeviceActionsAndCallRecordingTest {
         val failResult = failExecutor.execute(DeviceCommand.AnswerIncomingCall)
         assertFalse(failResult.succeeded)
         assertEquals(listOf("tier1:answer", "tier2:answer", "tier3:answer"), calls)
-        assertNotNull(failResult.missingPermissionAction)
         assertTrue(failResult.spokenFeedback.isNotBlank())
 
         // Verify EndCall also follows Tier 1 -> Tier 2 -> Tier 3 order.
@@ -277,7 +192,7 @@ class DeviceActionsAndCallRecordingTest {
         assertTrue(endResult.succeeded)
         assertEquals(listOf("tier1:decline", "tier2:decline", "tier3:decline"), calls)
 
-        // Verify AndroidManifest declares zero InCallService or ROLE_DIALER components.
+        // Verify AndroidManifest declares zero InCallService, ROLE_DIALER, AccessibilityService, or NotificationListener components.
         val pm = context.packageManager
         val pkgInfo = pm.getPackageInfo(
             context.packageName,
@@ -285,19 +200,24 @@ class DeviceActionsAndCallRecordingTest {
         )
         val serviceNames = pkgInfo.services.orEmpty().map { it.name }
         assertTrue(serviceNames.none { it.contains("InCall", ignoreCase = true) })
+        assertTrue(serviceNames.none { it.contains("Accessibility", ignoreCase = true) })
+        assertTrue(serviceNames.none { it.contains("NotificationListener", ignoreCase = true) })
         val perms = pkgInfo.requestedPermissions.orEmpty().toList()
         assertTrue(perms.none { it.contains("DIALER", ignoreCase = true) })
+        assertTrue(perms.none { it == "android.permission.BIND_ACCESSIBILITY_SERVICE" })
+        assertTrue(perms.none { it == "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" })
+        assertTrue(perms.none { it == "android.permission.QUERY_ALL_PACKAGES" })
+        assertTrue(perms.none { it == "android.permission.ANSWER_PHONE_CALLS" })
     }
 
     @Test(timeout = 15_000)
-    fun openYouTubeSearchArmsAutoPlayAndLaunchesYouTubeIntent() = runTest {
+    fun openYouTubeSearchLaunchesYouTubeIntent() = runTest {
         val executor = AndroidDeviceActionExecutor(context = context)
         val result = executor.execute(
             DeviceCommand.OpenYouTubeSearch(query = "Lệ Lưu Ly", autoPlay = true),
         )
 
         assertTrue(result.succeeded)
-        assertTrue(NaNaAccessibilityService.isYouTubeAutoPlayArmed())
 
         val startedIntent = shadowOf(context as Application).nextStartedActivity
         assertNotNull(startedIntent)
@@ -305,62 +225,10 @@ class DeviceActionsAndCallRecordingTest {
         assertEquals(Intent.ACTION_SEARCH, startedIntent.action)
         assertEquals("Lệ Lưu Ly", startedIntent.getStringExtra(SearchManager.QUERY))
 
-        // When autoPlay is false, auto-play must remain disarmed.
-        NaNaAccessibilityService.disarmYouTubeAutoPlay()
         val searchOnlyResult = executor.execute(
             DeviceCommand.OpenYouTubeSearch(query = "Nơi này có anh", autoPlay = false),
         )
         assertTrue(searchOnlyResult.succeeded)
-        assertFalse(NaNaAccessibilityService.isYouTubeAutoPlayArmed())
-    }
-
-    @Test(timeout = 15_000)
-    fun accessibilityServiceSkipsAdsTapsFirstVideoAndMatchesCallButtons() {
-        val service = NaNaAccessibilityService()
-        val adNode = newAccessibilityNode().apply {
-            text = "Quảng cáo · Mua sắm ngay"
-            isClickable = true
-            isVisibleToUser = true
-        }
-        val videoNode = newAccessibilityNode().apply {
-            contentDescription = "Lệ Lưu Ly - Vũ Phụng Tiên · 4:15"
-            isClickable = true
-            isVisibleToUser = true
-        }
-        shadowOf(videoNode).setOnPerformActionListener { action, _ ->
-            action == AccessibilityNodeInfo.ACTION_CLICK
-        }
-        val root = newAccessibilityNode().apply {
-            packageName = "com.google.android.youtube"
-        }
-        shadowOf(root).addChild(adNode)
-        shadowOf(root).addChild(videoNode)
-
-        NaNaAccessibilityService.armYouTubeAutoPlay("Lệ Lưu Ly", nowMs = 1_000L)
-        assertFalse(NaNaAccessibilityService.isYouTubeAutoPlayArmed(nowMs = 15_000L))
-
-        NaNaAccessibilityService.armYouTubeAutoPlay("Lệ Lưu Ly", nowMs = 10_000L)
-        val picked = service.findFirstNonAdYouTubeResult(root)
-        assertNotNull(picked)
-        assertEquals(videoNode.contentDescription, picked?.contentDescription)
-
-        val clicked = service.handleYouTubeAutoPlayOnRoot(root, nowMs = 10_500L)
-        assertTrue(clicked)
-        assertFalse(NaNaAccessibilityService.isYouTubeAutoPlayArmed(nowMs = 10_600L))
-
-        // Tier 3 call button lookup inside Accessibility tree.
-        val answerButton = newAccessibilityNode().apply {
-            text = "Nghe máy"
-            isClickable = true
-            isVisibleToUser = true
-        }
-        val callRoot = newAccessibilityNode().apply {
-            packageName = "com.zing.zalo"
-        }
-        shadowOf(callRoot).addChild(answerButton)
-        val matchedCallNode = service.findCallActionNode(callRoot, wantAnswer = true)
-        assertNotNull(matchedCallNode)
-        assertEquals("Nghe máy", matchedCallNode?.text?.toString())
     }
 
     @Test(timeout = 15_000)
@@ -518,24 +386,6 @@ class DeviceActionsAndCallRecordingTest {
             return tier3
         }
     }
-
-    @Suppress("DEPRECATION")
-    private fun newAccessibilityNode(): AccessibilityNodeInfo = AccessibilityNodeInfo.obtain()
-
-    @Suppress("DEPRECATION")
-    private fun createSbn(pkg: String, id: Int, notification: Notification): StatusBarNotification =
-        StatusBarNotification(
-            pkg,
-            pkg,
-            id,
-            null,
-            Process.myUid(),
-            Process.myPid(),
-            0,
-            notification,
-            Process.myUserHandle(),
-            1_793_500_000_000L,
-        )
 
     private class CountingSyncTrigger : SyncTrigger {
         var count = 0

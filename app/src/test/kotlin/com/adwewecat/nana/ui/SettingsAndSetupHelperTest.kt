@@ -81,18 +81,12 @@ class SettingsAndSetupHelperTest {
     fun originOsSetupHelperProvidesValidFallbackIntents() {
         val autostart = OriginOsSetupHelper.autostartIntent(context)
         val battery = OriginOsSetupHelper.batteryOptimizationIntent(context)
-        val notificationListener = OriginOsSetupHelper.notificationListenerIntent()
-        val accessibility = OriginOsSetupHelper.accessibilitySettingsIntent()
         val appDetails = OriginOsSetupHelper.appDetailsIntent(context)
 
         assertNotNull(autostart)
         assertNotNull(battery)
-        assertNotNull(notificationListener)
-        assertNotNull(accessibility)
         assertNotNull(appDetails)
 
-        assertEquals(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS, notificationListener.action)
-        assertEquals(Settings.ACTION_ACCESSIBILITY_SETTINGS, accessibility.action)
         assertEquals(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, appDetails.action)
         assertEquals("package:${context.packageName}", appDetails.data?.toString())
         assertTrue(autostart.action != null || autostart.component != null)

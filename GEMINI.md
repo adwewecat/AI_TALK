@@ -7,13 +7,13 @@
 - **Overview:** `AI_TALK` (**Na Na**, `com.adwewecat.nana`) — native Android voice assistant & AI companion optimized for **iQOO Z10 Turbo Pro (OriginOS 6 / Android 16)**:
   - Offline `"Na Na"` wake-word Foreground Service (`TYPE_BUILTIN_MIC` to protect Bluetooth A2DP stereo music) + continuous two-way Vietnamese voice sessions + Quick Settings Tile & optional `VoiceInteractionService`.
   - Multi-key & multi-provider AI failover (`Gemini Pro #1` -> `Gemini Pro #2` -> optional `Claude` / `ChatGPT` -> Free tier **"Em gái"**) with auto-routing for Vertex AI Express (`AQ.` -> `aiplatform.googleapis.com`) and AI Studio (`AIza` -> `generativelanguage.googleapis.com`), exact Vietnamese `"Na Na → Em gái"` handoff (`"Em vẫn đang mệt, anh có muốn tâm sự với em gái em không?"` -> `"ok"`), and decoupled Chat vs TTS health.
-  - Hands-free Android 16 device control: YouTube voice search + Accessibility auto-play, 3-tier SIM + Zalo/Messenger/Telegram call answer/decline (preserving Vivo/iQOO stock dialer — never declares `InCallService` or `ROLE_DIALER`), and OriginOS `Record/Call` call-recording SAF watcher + in-app fallback.
+  - Hands-free Android 16 device control: YouTube search & direct launch, SIM phone call & Zalo direct calling (100% banking-safe: zero Accessibility, zero NotificationListener, zero InCallService / ROLE_DIALER), and OriginOS `Record/Call` call-recording SAF watcher + in-app fallback.
   - Offline-first Room SQLite storage, Keystore-encrypted API key vault (`EncryptedSharedPreferences`), AppAuth PKCE Google Drive OAuth (`drive.file`), long-term companion memory extraction, and strict **Wi-Fi-only** (`NetworkType.UNMETERED` + `TRANSPORT_WIFI`/`INTERNET`/`NOT_METERED` + live `NetworkCallback` cancel) resumable Drive sync & reinstall restore.
 - **Key Directories:**
   - `core/src/main/kotlin/com/adwewecat/nana/core/` — Pure JVM library (`model/`, `quota/`, `ai/`, `voice/`, `sync/`).
   - `core/src/test/kotlin/com/adwewecat/nana/core/` — Pure JVM & `MockWebServer` unit tests (55 tests).
   - `app/src/main/kotlin/com/adwewecat/nana/` — Android app (`data/`, `voice/`, `actions/`, `di/`, `ui/`, `NaNaApplication.kt`, `MainActivity.kt`).
-  - `app/src/test/kotlin/com/adwewecat/nana/` — Robolectric Android unit tests (36 tests).
+  - `app/src/test/kotlin/com/adwewecat/nana/` — Robolectric Android unit tests (35 tests).
   - `.github/workflows/android-build.yml` — CI test & debug APK build workflow.
   - `docs/superpowers/` — Approved design spec & 10-task TDD plan; `SETUP_ANDROID.md` — iQOO setup guide.
   - `.agents/skills/` — Installed `Skill_Workflow_A.I` suite (42 skills).
@@ -31,7 +31,7 @@
 # Run pure-JVM core tests (fast, < 5s)
 .\gradlew.bat :core:test --no-daemon
 
-# Run full unit test suite (:core + :app Robolectric, 91 tests)
+# Run full unit test suite (:core + :app Robolectric, 90 tests)
 .\gradlew.bat :core:test :app:testDebugUnitTest --no-daemon
 
 # Build debug APK (outputs app/build/outputs/apk/debug/app-debug.apk)

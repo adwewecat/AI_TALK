@@ -42,14 +42,6 @@ object OriginOsSetupHelper {
         return appDetailsIntent(context)
     }
 
-    /** Returns the Android Notification Listener settings intent. */
-    fun notificationListenerIntent(): Intent =
-        Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
-
-    /** Returns the Android Accessibility settings intent. */
-    fun accessibilitySettingsIntent(): Intent =
-        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-
     /** Returns the Android Text-to-Speech settings intent (for selecting Google TTS vi-VN offline). */
     fun ttsSettingsIntent(context: Context): Intent {
         val ttsSettings = Intent("com.android.settings.TTS_SETTINGS")
